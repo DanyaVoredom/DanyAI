@@ -69,8 +69,8 @@ def lr_at(step, steps, base, warmup):
     return base * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * p)))
 
 
-def save(model, cfg, path):
-    np.savez(path, cfg=np.array(json.dumps(cfg)), **model.state())
+def save(model, cfg, path, step=0, best=float("inf")):
+    np.savez(path, cfg=np.array(json.dumps(cfg)), step=np.array(step), best=np.array(best), **model.state())
 
 
 def main():
@@ -95,11 +95,14 @@ def main():
 
     model = GPT(cfg)
     start = 0
+    best = float("inf")
     if args.resume and os.path.exists(args.resume):
         z = np.load(args.resume, allow_pickle=False)
-        model.load_state({k: z[k] for k in z.files if k != "cfg"})
-        start = int(cfg.get("resume_step", 0))
-    print(f"{cfg.get('name', 'DanyAI')} params {model.num_params():,}", flush=True)
+        model.load_state({k: z[k] for k in z.files if k not in ("cfg", "step", "best")})
+        start = int(z["step"]) if "step" in z.files else 0
+        if "best" in z.files:
+            best = float(z["best"])
+    print(f"{cfg.get('name', 'DanyAI')} params {model.num_params():,} start {start}", flush=True)
 
     opt = AdamW(model.named_params(), cfg["lr"], wd=cfg.get("weight_decay", 0.1))
     rng = np.random.default_rng(cfg.get("seed", 1337) + args.seed)
@@ -128,12 +131,12 @@ def main():
             flag = ""
             if vl < best:
                 best = vl
-                save(model, cfg, os.path.join(args.out, "best.npz"))
+                save(model, cfg, os.path.join(args.out, "best.npz"), step, best)
                 flag = " best"
             print(f"eval step {step} val {vl:.4f}{flag}", flush=True)
         if step % cfg.get("save_every", 500) == 0 or step == steps:
-            save(model, cfg, os.path.join(args.out, "ckpt.npz"))
-            save(model, cfg, os.path.join(args.out, f"ckpt_{step}.npz"))
+            save(model, cfg, os.path.join(args.out, "ckpt.npz"), step, best)
+            save(model, cfg, os.path.join(args.out, f"ckpt_{step}.npz"), step, best)
 
     print(f"done {time.time() - t0:.0f}s best val {best:.4f}", flush=True)
 

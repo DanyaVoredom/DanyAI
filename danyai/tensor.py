@@ -4,7 +4,10 @@ DTYPE = np.float32
 
 
 def _acc(a, b):
-    return b.copy() if a is None else a + b
+    if a is None:
+        return b
+    a += b
+    return a
 
 
 def _unbroadcast(g, shape):
@@ -17,6 +20,8 @@ def _unbroadcast(g, shape):
 
 
 class T:
+    __slots__ = ("data", "grad", "requires_grad", "_parents", "_backward")
+
     def __init__(self, data, requires_grad=False, parents=(), backward=None):
         self.data = np.asarray(data, dtype=DTYPE)
         self.grad = None
@@ -62,24 +67,19 @@ def mul(a, b):
 
 
 def matmul(a, b, tb=False):
-    bb = np.swapaxes(b.data, -1, -2) if tb else b.data
+    bb = b.data.swapaxes(-1, -2) if tb else b.data
     out = T(a.data @ bb, a.requires_grad or b.requires_grad, (a, b))
 
     def bw():
+        g = out.grad
         if a.requires_grad:
-            a.grad = _acc(a.grad, out.grad @ np.swapaxes(bb, -1, -2))
+            ga = g @ bb.swapaxes(-1, -2)
+            a.grad = _acc(a.grad, _unbroadcast(ga, a.data.shape))
         if b.requires_grad:
+            gb = a.data.swapaxes(-1, -2) @ g
             if tb:
-                if b.data.ndim == 2:
-                    gb = out.grad.reshape(-1, out.grad.shape[-1]).T @ a.data.reshape(-1, a.data.shape[-1])
-                else:
-                    gb = np.swapaxes(out.grad, -1, -2) @ a.data
-            else:
-                if b.data.ndim == 2:
-                    gb = a.data.reshape(-1, a.data.shape[-1]).T @ out.grad.reshape(-1, out.grad.shape[-1])
-                else:
-                    gb = np.swapaxes(a.data, -1, -2) @ out.grad
-            b.grad = _acc(b.grad, gb)
+                gb = gb.swapaxes(-1, -2)
+            b.grad = _acc(b.grad, _unbroadcast(gb, b.data.shape))
 
     out._backward = bw
     return out
@@ -106,39 +106,53 @@ def transpose(t, axes):
     return out
 
 
+_GELU_C = np.float32(np.sqrt(2.0 / np.pi))
+_GELU_A = np.float32(0.044715)
+_GELU_3A = np.float32(3.0 * 0.044715)
+_HALF = np.float32(0.5)
+_ONE = np.float32(1.0)
+
+
 def gelu(t):
-    c = np.float32(np.sqrt(2.0 / np.pi))
     x = t.data
-    inner = c * (x + np.float32(0.044715) * x ** 3)
-    th = np.tanh(inner)
-    out = T(0.5 * x * (1.0 + th), t.requires_grad, (t,))
+    x2 = x * x
+    u = _GELU_C * (x + _GELU_A * x2 * x)
+    th = np.tanh(u)
+    out = T(_HALF * x * (_ONE + th), t.requires_grad, (t,))
 
     def bw():
-        dinner = c * (1.0 + np.float32(3 * 0.044715) * x ** 2)
-        d = 0.5 * (1.0 + th) + 0.5 * x * (1.0 - th ** 2) * dinner
-        t.grad = _acc(t.grad, out.grad * d)
+        sech2 = _ONE - th * th
+        du = _GELU_C * (_ONE + _GELU_3A * x2)
+        d = _HALF * (_ONE + th) + _HALF * x * sech2 * du
+        d *= out.grad
+        t.grad = _acc(t.grad, d)
 
     out._backward = bw
     return out
 
 
 def layernorm(x, g, b, eps=1e-5):
-    mu = x.data.mean(-1, keepdims=True)
-    var = x.data.var(-1, keepdims=True)
-    std = np.sqrt(var + eps)
-    xhat = (x.data - mu) / std
+    xd = x.data
+    mu = xd.mean(-1, keepdims=True)
+    xc = xd - mu
+    var = (xc * xc).mean(-1, keepdims=True)
+    rstd = np.float32(1.0) / np.sqrt(var + eps)
+    xhat = xc * rstd
     out = T(xhat * g.data + b.data, x.requires_grad or g.requires_grad or b.requires_grad, (x, g, b))
+    axes = tuple(range(xd.ndim - 1))
 
     def bw():
         d = out.grad
         if g.requires_grad:
-            g.grad = _acc(g.grad, (d * xhat).sum(axis=tuple(range(d.ndim - 1))))
+            g.grad = _acc(g.grad, (d * xhat).sum(axis=axes))
         if b.requires_grad:
-            b.grad = _acc(b.grad, d.sum(axis=tuple(range(d.ndim - 1))))
+            b.grad = _acc(b.grad, d.sum(axis=axes))
         if x.requires_grad:
             dxhat = d * g.data
-            dx = (dxhat - dxhat.mean(-1, keepdims=True) - xhat * (dxhat * xhat).mean(-1, keepdims=True)) / std
-            x.grad = _acc(x.grad, dx)
+            dxhat -= dxhat.mean(-1, keepdims=True)
+            dxhat -= xhat * (dxhat * xhat).mean(-1, keepdims=True)
+            dxhat *= rstd
+            x.grad = _acc(x.grad, dxhat)
 
     out._backward = bw
     return out
@@ -152,7 +166,8 @@ def softmax(x):
 
     def bw():
         g = out.grad
-        x.grad = _acc(x.grad, p * (g - (g * p).sum(-1, keepdims=True)))
+        s = (g * p).sum(-1, keepdims=True)
+        x.grad = _acc(x.grad, p * (g - s))
 
     out._backward = bw
     return out
@@ -175,18 +190,21 @@ def cross_entropy(logits, targets):
     targets = np.asarray(targets)
     x = logits.data
     z = x - x.max(-1, keepdims=True)
-    lse = np.log(np.exp(z).sum(-1, keepdims=True))
-    logp = z - lse
+    e = np.exp(z)
+    p = e / e.sum(-1, keepdims=True)
+    v = p.shape[-1]
+    flat = p.reshape(-1, v)
     n = targets.size
-    flat = logp.reshape(-1, logp.shape[-1])
-    loss = -flat[np.arange(n), targets.ravel()].mean()
+    y = targets.ravel()
+    rows = np.arange(n)
+    loss = -np.log(flat[rows, y] + 1e-9).mean()
     out = T(loss, logits.requires_grad, (logits,))
 
     def bw():
-        p = np.exp(logp)
-        p = p.reshape(-1, p.shape[-1]).copy()
-        p[np.arange(n), targets.ravel()] -= 1.0
-        logits.grad = _acc(logits.grad, (p / n).reshape(logits.data.shape))
+        d = flat
+        d[rows, y] -= 1.0
+        d *= np.float32(1.0 / n)
+        logits.grad = _acc(logits.grad, d.reshape(logits.data.shape))
 
     out._backward = bw
     return out
