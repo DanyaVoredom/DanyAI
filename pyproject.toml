@@ -9,5 +9,8 @@ description = "Local language model family"
 requires-python = ">=3.10"
 dependencies = ["numpy"]
 
+[project.optional-dependencies]
+colab = ["playwright"]
+
 [tool.setuptools.packages.find]
 include = ["danyai*"]

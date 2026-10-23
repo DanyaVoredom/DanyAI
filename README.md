@@ -34,6 +34,13 @@
     python -m danyai.chat --ckpt runs/nano/best.npz --tok data/tokenizer.json
     python -m danyai.server --ckpt runs/nano/best.npz --tok data/tokenizer.json
 
+## Colab из консоли
+
+    pip install playwright
+    python tools/colab_cli.py --headed --gpu --keep-open
+
+Первый запуск в headed-режиме нужен один раз для входа в Google. Профиль сохраняется в %LOCALAPPDATA%\DanyAI\colab-profile, дальше запуск идёт без окна и без логина: добавляет ячейку со сборкой артефактов, жмёт Run all, стримит логи, скачивает best_colab.npz в runs/mini. Флаги: --no-download, --timeout, --out.
+
 ## Проверки
 
     python tests/gradcheck.py
