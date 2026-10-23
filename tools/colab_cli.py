@@ -1,271 +1,307 @@
 #!/usr/bin/env python3
 import argparse
+import base64
+import json
 import os
+import re
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
-from playwright.sync_api import TimeoutError as PWTimeout
 
-URL = "https://colab.research.google.com/github/DanyaVoredom/DanyAI/blob/dev/colab/train_danyai.ipynb"
+SETUP = """!pip -q install numpy
+!rm -rf /content/DanyAI
+!git clone -q https://github.com/DanyaVoredom/DanyAI.git /content/DanyAI
+%cd /content/DanyAI
+!pip -q install -e .
+!nvidia-smi --query-gpu=name,memory.total --format=csv || true
+print("setup done")"""
 
-PACK = (
-    "!cd /content/DanyAI && tar czf /content/danyai_artifacts.tgz "
-    "runs/colab data/tokenizer.json data/meta.json configs/colab.json "
-    "&& cp runs/colab/best.npz /content/best_colab.npz && ls -lh /content"
-)
+TRAIN = """import os, json, subprocess
+os.makedirs("data/raw", exist_ok=True)
+ids = [1342, 11, 1661, 2701, 84, 98, 345, 5200, 16328, 2600]
+for i in ids:
+    subprocess.run(["curl", "-s", "-L",
+                    f"https://www.gutenberg.org/cache/epub/{i}/pg{i}.txt",
+                    "-o", f"data/raw/pg{i}.txt"], check=False)
+print("corpus files", len(os.listdir("data/raw")))
+!python -m danyai.prepare --input data/raw --out data --vocab __VOCAB__ --val 0.02
+cfg = json.load(open("configs/mini.json"))
+cfg.update(block_size=__BLOCK__, batch_size=__BATCH__, steps=__STEPS__, lr=0.0015, warmup=__WARMUP__)
+cfg["name"] = "DanyAI-Mini-Colab"
+json.dump(cfg, open("configs/colab.json", "w"), indent=2)
+print(cfg)
+!python -m danyai.train --config configs/colab.json --data data --out runs/colab
+!python -m danyai.sample --ckpt runs/colab/best.npz --tok data/tokenizer.json --prompt "The house" --tokens 200 --temp 0.8
+print("train done")"""
 
-DIALOGS = ["Run anyway", "Connect", "Yes", "OK", "Continue"]
-
-FILES_BTN = [
-    'button[aria-label="Files"]',
-    '[data-tooltip="Files"]',
-    'mwc-icon-button[title="Files"]',
-]
+PACK = """import base64, pathlib
+for name in ["runs/colab/best.npz", "data/tokenizer.json", "data/meta.json", "configs/colab.json"]:
+    p = pathlib.Path(name)
+    if not p.exists():
+        print("@@MISSING", name)
+        continue
+    b = base64.b64encode(p.read_bytes()).decode()
+    print(f"@@BEGIN {name} {len(b)}")
+    for i in range(0, len(b), 50000):
+        print(b[i:i + 50000])
+    print(f"@@END {name}")
+print("pack done")"""
 
 
 def log(msg):
     print(msg, flush=True)
 
 
-def nudge(page):
-    for name in DIALOGS:
+def notebook(cells):
+    nb = {
+        "nbformat": 4,
+        "nbformat_minor": 0,
+        "metadata": {
+            "colab": {"provenance": [], "gpuType": "T4"},
+            "accelerator": "GPU",
+            "kernelspec": {"name": "python3", "display_name": "Python 3"},
+            "language_info": {"name": "python"},
+        },
+        "cells": [],
+    }
+    for src in cells:
+        lines = src.splitlines(True)
+        nb["cells"].append({
+            "cell_type": "code",
+            "metadata": {},
+            "execution_count": None,
+            "outputs": [],
+            "source": lines,
+        })
+    return nb
+
+
+def build(train_cell, use_git, artifacts):
+    cells = []
+    if use_git:
+        cells.append(SETUP)
+    cells.append(train_cell)
+    if artifacts:
+        cells.append(PACK)
+    return notebook(cells)
+
+
+def publish(path, desc):
+    out = subprocess.run(
+        ["gh", "gist", "create", "--public", "--desc", desc, str(path)],
+        capture_output=True, text=True, check=False,
+    )
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.strip() or "gist create failed")
+    url = out.stdout.strip().splitlines()[-1].strip()
+    return url
+
+
+def gist_colab_url(gist_url):
+    m = re.search(r"gist\.github\.com/([^/]+)/([0-9a-f]+)", gist_url)
+    if not m:
+        raise RuntimeError(f"cannot parse gist url: {gist_url}")
+    user, gid = m.group(1), m.group(2)
+    return f"https://colab.research.google.com/gist/{user}/{gid}/train_danyai.ipynb"
+
+
+RUN_LABELS = ["Выполнить", "Run anyway", "Run", "Выполнить все", "Run all"]
+
+
+def alive(ctx):
+    try:
+        return len(ctx.pages) > 0 and not ctx.pages[0].is_closed()
+    except Exception:
+        return False
+
+
+def accept_run(page):
+    for label in RUN_LABELS:
         try:
-            btn = page.get_by_role("button", name=name, exact=True)
-            if btn.count() and btn.first.is_visible():
-                btn.first.click(timeout=2000)
-                log(f"dialog: {name}")
-                page.wait_for_timeout(500)
+            loc = page.get_by_role("button", name=label, exact=True)
+            for i in range(min(loc.count(), 4)):
+                b = loc.nth(i)
+                if b.is_visible():
+                    b.click(timeout=2000, force=True)
+                    log(f"confirmed: {label}")
+                    page.wait_for_timeout(800)
+                    return True
         except Exception:
-            pass
+            continue
+    return False
 
 
-def wait_notebook(page, timeout):
+def frames_text(page):
+    parts = []
+    for frame in page.frames:
+        try:
+            blocks = frame.locator("pre")
+            for i in range(blocks.count()):
+                try:
+                    t = blocks.nth(i).inner_text(timeout=500)
+                except Exception:
+                    continue
+                if t:
+                    parts.append(t)
+        except Exception:
+            continue
+    return "\n".join(parts)
+
+
+def wait_ready(page, timeout):
     end = time.time() + timeout
     while time.time() < end:
         try:
-            if page.locator("textarea.inputarea").count():
+            if page.locator("textarea.inputarea").count() > 0 and page.locator(".cell").count() > 0:
                 return True
         except Exception:
             pass
-        nudge(page)
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(1500)
     return False
 
 
-def insert_cell(page, code):
-    btns = [
-        page.get_by_role("button", name="Code", exact=True),
-        page.locator("text=+ Code"),
-        page.locator('[aria-label="Add code cell"]'),
-    ]
-    clicked = False
-    for b in btns:
-        try:
-            if b.count():
-                b.last.click(timeout=5000)
-                clicked = True
-                break
-        except Exception:
-            continue
-    if not clicked:
-        return False
-    page.wait_for_timeout(1200)
-    areas = page.locator("textarea.inputarea")
-    areas.nth(areas.count() - 1).click()
-    page.wait_for_timeout(400)
-    page.keyboard.type(code, delay=0)
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(500)
-    return True
-
-
-def cell_logs(page):
-    out = []
-    try:
-        blocks = page.locator(".output_subarea pre")
-        for i in range(blocks.count()):
-            try:
-                t = blocks.nth(i).inner_text(timeout=1000)
-            except Exception:
-                continue
-            if t:
-                out.append(t)
-    except Exception:
-        pass
-    return out
-
-
-def stream(page, seen, stop_when, limit):
+def stream(page, ctx, stop_when, limit, dump):
     end = time.time() + limit
-    idle_since = None
-    marker = False
+    last = 0
+    marker_at = None
     while time.time() < end:
-        nudge(page)
-        cur = cell_logs(page)
-        for i, text in enumerate(cur):
-            if i >= len(seen):
-                seen.extend([""] * (i + 1 - len(seen)))
-            old = seen[i]
-            if len(text) > len(old):
-                chunk = text[len(old):]
-                for line in chunk.splitlines():
-                    log(line)
-                if stop_when and stop_when in text:
-                    marker = True
-                seen[i] = text
-        try:
-            running = page.locator(".cell.running").count()
-        except Exception:
-            running = 0
-        if running == 0:
-            idle_since = idle_since or time.time()
-            if marker and time.time() - idle_since > 20:
-                return True
-        else:
-            idle_since = None
-        page.wait_for_timeout(2000)
-    return False
-
-
-def run_all(page):
-    page.keyboard.press("Control+F9")
-    page.wait_for_timeout(3000)
-    nudge(page)
-
-
-def pick_gpu(page):
-    try:
-        page.get_by_role("menuitem", name="Runtime").click(timeout=5000)
-    except Exception:
-        try:
-            page.locator("text=Runtime").first.click(timeout=5000)
-        except Exception:
+        if not alive(ctx):
             return False
-    page.wait_for_timeout(600)
-    try:
-        page.locator("text=Change runtime type").first.click(timeout=5000)
-    except Exception:
-        return False
-    page.wait_for_timeout(1500)
-    for sel in ['select', 'mwc-select', '[role="listbox"]']:
         try:
-            box = page.locator(sel).first
-            if box.count():
-                box.click(timeout=3000)
-                page.wait_for_timeout(500)
-                page.locator("text=T4 GPU").first.click(timeout=3000)
-                page.wait_for_timeout(500)
-                break
-        except Exception:
-            continue
-    for name in ["Save", "OK"]:
-        try:
-            page.get_by_role("button", name=name, exact=True).first.click(timeout=3000)
-            break
-        except Exception:
-            continue
-    log("gpu: T4 requested")
-    return True
-
-
-def open_files(page):
-    for sel in FILES_BTN:
-        try:
-            el = page.locator(sel).first
-            if el.count():
-                el.click(timeout=5000)
-                page.wait_for_timeout(1500)
+            accept_run(page)
+            text = frames_text(page)
+            if len(text) > last:
+                for line in text[last:].splitlines():
+                    if not line.startswith("@@") and len(line) < 400:
+                        log(line)
+                last = len(text)
+                dump.parent.mkdir(parents=True, exist_ok=True)
+                dump.write_text(text, encoding="utf-8")
+            if stop_when in text and marker_at is None:
+                marker_at = time.time()
+            try:
+                running = page.locator(".cell.running").count()
+            except Exception:
+                running = 1
+            if marker_at and running == 0 and time.time() - marker_at > 8:
                 return True
-        except Exception:
-            continue
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            if not alive(ctx):
+                return False
+            log(f"stream: {type(e).__name__}")
+            page.wait_for_timeout(2000)
     return False
 
 
-def download(page, name, dest):
-    if not open_files(page):
-        log("files: pane not found")
-        return False
-    page.wait_for_timeout(1500)
-    try:
-        row = page.get_by_text(name, exact=True).first
-        row.scroll_into_view_if_needed(timeout=10000)
-        row.hover(timeout=5000)
-        page.wait_for_timeout(700)
+def extract(text, out):
+    saved = []
+    for m in re.finditer(r"@@BEGIN (\S+) (\d+)\n(.*?)@@END \1", text, re.S):
+        name, size, payload = m.group(1), int(m.group(2)), m.group(3)
+        b64 = "".join(payload.split())
+        if len(b64) < size:
+            log(f"artifact {name}: truncated {len(b64)}/{size}")
+            continue
+        dest = out / Path(name).name
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with page.expect_download(timeout=180000) as info:
-            btn = page.locator('[aria-label="Download"]').first
-            if not btn.count():
-                btn = page.locator('[title="Download"]').first
-            btn.click(timeout=10000)
-        info.value.save_as(str(dest))
-        log(f"saved: {dest}")
-        return True
-    except Exception as e:
-        log(f"download failed: {type(e).__name__}")
-        return False
+        dest.write_bytes(base64.b64decode(b64[:size]))
+        saved.append((str(dest), len(b64) * 3 // 4))
+    return saved
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default=URL)
+    ap.add_argument("--url", default="")
+    ap.add_argument("--notebook", default="colab/train_danyai.ipynb")
     ap.add_argument("--profile", default=str(Path(os.environ.get("LOCALAPPDATA", ".")) / "DanyAI" / "colab-profile"))
+    ap.add_argument("--out", default="runs/mini")
     ap.add_argument("--headed", action="store_true")
-    ap.add_argument("--gpu", action="store_true")
-    ap.add_argument("--out", default="runs/mini/best_colab.npz")
-    ap.add_argument("--file", default="best_colab.npz")
-    ap.add_argument("--timeout", type=int, default=7200)
+    ap.add_argument("--steps", type=int, default=20000)
+    ap.add_argument("--vocab", type=int, default=8192)
+    ap.add_argument("--block", type=int, default=256)
+    ap.add_argument("--batch", type=int, default=48)
+    ap.add_argument("--warmup", type=int, default=500)
+    ap.add_argument("--timeout", type=int, default=21600)
+    ap.add_argument("--ready-wait", type=int, default=180)
     ap.add_argument("--keep-open", action="store_true")
-    ap.add_argument("--no-download", action="store_true")
+    ap.add_argument("--no-artifacts", action="store_true")
+    ap.add_argument("--no-git", action="store_true")
+    ap.add_argument("--dump", default="runs/colab_output.txt")
     ap.add_argument("--channel", default="chrome")
     args = ap.parse_args()
+
+    out = Path(args.out)
+    nb_path = Path(args.notebook)
+
+    if args.url:
+        url = args.url
+    else:
+        train = (TRAIN
+                 .replace("__VOCAB__", str(args.vocab))
+                 .replace("__BLOCK__", str(args.block))
+                 .replace("__BATCH__", str(args.batch))
+                 .replace("__STEPS__", str(args.steps))
+                 .replace("__WARMUP__", str(args.warmup)))
+        nb = build(train, not args.no_git, not args.no_artifacts)
+        nb_path.parent.mkdir(parents=True, exist_ok=True)
+        nb_path.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
+        gist = publish(nb_path, "danyai colab run")
+        log(f"gist {gist}")
+        url = gist_colab_url(gist)
+
+    log(f"open {url}")
 
     with sync_playwright() as p:
         kw = dict(
             user_data_dir=args.profile,
             headless=not args.headed,
-            accept_downloads=True,
             viewport={"width": 1440, "height": 960},
             args=["--disable-blink-features=AutomationControlled"],
         )
         try:
             ctx = p.chromium.launch_persistent_context(channel=args.channel, **kw)
         except Exception:
-            log(f"channel {args.channel} unavailable, using bundled chromium")
             ctx = p.chromium.launch_persistent_context(**kw)
 
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto(args.url, wait_until="domcontentloaded", timeout=120000)
-        if not wait_notebook(page, 120000):
-            log("error: notebook editor did not load")
+        page.goto(url, wait_until="domcontentloaded", timeout=120000)
+        if not wait_ready(page, args.ready_wait * 1000):
+            log("error: notebook did not open")
+            try:
+                page.screenshot(path=str(out / "failed.png"))
+            except Exception:
+                pass
+            if args.headed:
+                try:
+                    while alive(ctx):
+                        page.wait_for_timeout(5000)
+                except KeyboardInterrupt:
+                    pass
             ctx.close()
             return 1
-        log("notebook loaded")
-        nudge(page)
-        page.wait_for_timeout(2000)
-
-        if args.gpu:
-            pick_gpu(page)
-
-        if not insert_cell(page, PACK):
-            log("error: could not insert artifact cell")
-        else:
-            log("artifact cell added")
-
-        run_all(page)
+        log("notebook ready")
+        page.wait_for_timeout(1500)
+        page.keyboard.press("Control+F9")
+        page.wait_for_timeout(4000)
         log("run all started")
-        ok = stream(page, [], "best_colab.npz", args.timeout)
-        log("run finished" if ok else "run timed out or marker not found")
 
-        if not args.no_download:
-            if not download(page, args.file, Path(args.out)):
-                log("manual: download from the open file pane")
+        stop = "pack done" if not args.no_artifacts else "train done"
+        ok = stream(page, ctx, stop, args.timeout, Path(args.dump))
+        log("finished" if ok else "timed out")
+
+        if ok and not args.no_artifacts:
+            text = frames_text(page)
+            Path(args.dump).write_text(text, encoding="utf-8")
+            for path, size in extract(text, out):
+                log(f"saved {path} ~{size} bytes")
 
         if args.keep_open or args.headed:
-            log("browser left open, Ctrl+C to exit")
+            log("browser open, Ctrl+C to exit")
             try:
-                while True:
+                while alive(ctx):
                     page.wait_for_timeout(5000)
             except KeyboardInterrupt:
                 pass

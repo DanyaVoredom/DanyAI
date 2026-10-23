@@ -110,7 +110,6 @@ def main():
     warmup = cfg.get("warmup", max(10, steps // 100))
     clip = cfg.get("grad_clip", 1.0)
     os.makedirs(args.out, exist_ok=True)
-    best = float("inf")
     t0 = time.time()
 
     for step in range(start + 1, steps + 1):
@@ -125,7 +124,7 @@ def main():
         if step % cfg.get("log_every", 10) == 0:
             el = time.time() - t0
             print(f"step {step} loss {float(loss.data):.4f} lr {lr:.2e} gn {gn:.2f} {el:.0f}s", flush=True)
-        if step % cfg.get("eval_every", 200) == 0:
+        if step % cfg.get("eval_every", 200) == 0 or step == steps:
             xv, yv = get_batch(val, cfg["block_size"], cfg["batch_size"], rng)
             vl = float(model.loss(xv, yv).data)
             flag = ""
