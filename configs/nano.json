@@ -1,0 +1,15 @@
+{
+  "name": "DanyAI-Nano",
+  "n_layer": 4,
+  "n_head": 4,
+  "n_embd": 128,
+  "batch_size": 32,
+  "lr": 0.003,
+  "steps": 20000,
+  "block_size": 256,
+  "weight_decay": 0.1,
+  "log_every": 10,
+  "eval_every": 500,
+  "save_every": 1000,
+  "seed": 1337
+}
