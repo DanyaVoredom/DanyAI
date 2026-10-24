@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 import argparse
+import atexit
 import base64
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -83,9 +86,10 @@ def build(train_cell, use_git, artifacts):
     cells = []
     if use_git:
         cells.append(SETUP)
-    cells.append(train_cell)
     if artifacts:
-        cells.append(PACK)
+        cells.append(train_cell + "\n\n" + PACK)
+    else:
+        cells.append(train_cell)
     return notebook(cells)
 
 
@@ -108,7 +112,56 @@ def gist_colab_url(gist_url):
     return f"https://colab.research.google.com/gist/{user}/{gid}/train_danyai.ipynb"
 
 
-RUN_LABELS = ["Выполнить", "Run anyway", "Run", "Выполнить все", "Run all"]
+CHROME_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=BlockThirdPartyCookies,TrackingProtection3pcd,ThirdPartyStoragePartitioning,PrivacySandboxSettings4",
+    "--disable-site-isolation-trials",
+]
+
+SIGNIN_WORDS = ("Требуется вход", "sign-in required", "Sign in required", "Войдите в аккаунт")
+
+GITHUB_WORDS = ("Запросить авторизацию", "Authorize with GitHub")
+
+
+def prepare_profile(profile):
+    pref = Path(profile) / "Default" / "Preferences"
+    pref.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if pref.exists():
+        try:
+            data = json.loads(pref.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    prof = data.setdefault("profile", {})
+    prof["cookie_controls_mode"] = 0
+    prof["block_third_party_cookies"] = False
+    pref.write_text(json.dumps(data), encoding="utf-8")
+
+
+def page_text(page):
+    parts = []
+    for frame in page.frames:
+        try:
+            parts.append(frame.inner_text("body"))
+        except Exception:
+            continue
+    return "\n".join(parts)
+
+
+def blocker(page):
+    text = page_text(page)
+    low = text.lower()
+    for w in SIGNIN_WORDS:
+        if w.lower() in low:
+            return "signin"
+    for w in GITHUB_WORDS:
+        if w.lower() in low:
+            return "github"
+    if "Блокнот не найден" in text:
+        return "missing"
+    return None
+
+
 
 
 def alive(ctx):
@@ -118,36 +171,277 @@ def alive(ctx):
         return False
 
 
-def accept_run(page):
-    for label in RUN_LABELS:
+def click_label(root, labels):
+    for label in labels:
         try:
-            loc = page.get_by_role("button", name=label, exact=True)
-            for i in range(min(loc.count(), 4)):
-                b = loc.nth(i)
-                if b.is_visible():
-                    b.click(timeout=2000, force=True)
-                    log(f"confirmed: {label}")
-                    page.wait_for_timeout(800)
-                    return True
+            loc = root.get_by_role("button", name=label, exact=True)
+            if not loc.count():
+                continue
+            b = loc.first
+            if b.is_visible() and b.is_enabled():
+                b.click(timeout=3000)
+                return label
+        except Exception:
+            continue
+    return None
+
+
+ACCEPT_JS = """() => {
+  const labels = ['\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c', 'Run anyway', 'Run', '\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0432\u0441\u0435', 'Run all'];
+  const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+  const visible = b => {
+    const r = b.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    const st = window.getComputedStyle(b);
+    return st.display !== 'none' && st.visibility !== 'hidden';
+  };
+  const dlg = b => b.closest('[role=dialog], colab-dialog, .cdk-overlay-pane, mat-dialog-container, .dialog, md-dialog-container');
+  let hit = null;
+  for (const b of document.querySelectorAll('button, [role=button]')) {
+    const t = norm(b.innerText || b.textContent);
+    if (labels.includes(t) && visible(b) && dlg(b)) { hit = b; break; }
+  }
+  if (!hit) {
+    for (const b of document.querySelectorAll('button, [role=button]')) {
+      const t = norm(b.innerText || b.textContent);
+      if (labels.includes(t) && visible(b)) { hit = b; break; }
+    }
+  }
+  if (!hit) return null;
+  hit.click();
+  return norm(hit.innerText || hit.textContent);
+}"""
+
+CONNECT_JS = """() => {
+  const labels = ['\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c\u0441\u044f', 'Connect'];
+  const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+  for (const b of document.querySelectorAll('button, [role=button], [role=menuitem]')) {
+    const t = norm(b.innerText || b.textContent);
+    if (!labels.includes(t)) continue;
+    const r = b.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    b.click();
+    return t;
+  }
+  return null;
+}"""
+
+
+def frame_call(page, js):
+    for frame in page.frames:
+        try:
+            res = frame.evaluate(js)
+        except Exception:
+            continue
+        if res:
+            return res
+    return None
+
+
+SIGNIN_JS = """() => {
+  const t = (document.body.innerText || "").toLowerCase();
+  if (t.indexOf("sign-in required") >= 0) return true;
+  if (t.indexOf("\u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f \u0432\u0445\u043e\u0434") >= 0) return true;
+  for (const a of document.querySelectorAll("a[href*=\"accounts.google.com\"]")) {
+    const r = a.getBoundingClientRect();
+    if (r.width && r.height) return true;
+  }
+  return false;
+}"""
+
+
+def signed_out(page):
+    for frame in page.frames:
+        try:
+            if frame.evaluate(SIGNIN_JS):
+                return True
         except Exception:
             continue
     return False
+
+
+HAS_DLG_JS = """() => {
+  for (const d of document.querySelectorAll("dialog, [role=dialog]")) {
+    const r = d.getBoundingClientRect();
+    if (r.width > 200 && r.height > 100) return true;
+  }
+  return false;
+}"""
+
+PICK_BTNS_JS = """() => {
+  let dlg = null;
+  for (const d of document.querySelectorAll("dialog, [role=dialog]")) {
+    const r = d.getBoundingClientRect();
+    if (r.width > 200 && r.height > 100) { dlg = r; break; }
+  }
+  if (!dlg) return null;
+  const cands = [];
+  const walk = root => {
+    for (const el of root.querySelectorAll("*")) {
+      if (el.shadowRoot) walk(el.shadowRoot);
+      if (el.tagName !== "BUTTON" && el.getAttribute("role") !== "button") continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const cx = r.x + r.width / 2;
+      const cy = r.y + r.height / 2;
+      if (cx < dlg.x || cx > dlg.x + dlg.width) continue;
+      if (cy < dlg.y || cy > dlg.y + dlg.height) continue;
+      const st = window.getComputedStyle(el);
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      cands.push({x: cx, y: cy, rx: r.x});
+    }
+  };
+  walk(document);
+  if (!cands.length) {
+    return [{x: dlg.x + dlg.width * 0.88, y: dlg.y + dlg.height * 0.81, rx: 0}];
+  }
+  cands.sort((a, b) => a.rx - b.rx);
+  return cands;
+}"""
+
+
+CLICK_LABEL_JS = r"""() => {
+  const labels = ['\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c', 'Run anyway', '\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0432\u0441\u0435', 'Run all', 'Run'];
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  let hit = null;
+  const walk = root => {
+    if (hit) return;
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) walk(el.shadowRoot);
+      if (hit) return;
+      if (!el.tagName.endsWith('BUTTON')) continue;
+      const t = norm(el.innerText || el.textContent);
+      if (!labels.includes(t)) continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      if (r.y < 160) continue;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden' || st.pointerEvents === 'none') continue;
+      hit = el;
+      return;
+    }
+  };
+  walk(document);
+  if (!hit) return null;
+  const label = norm(hit.innerText || hit.textContent);
+  hit.click();
+  return label;
+}"""
+
+
+RUN_ALL_JS = r"""() => {
+  const labels = ['\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0432\u0441\u0435', 'Run all'];
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  let hit = null;
+  const walk = root => {
+    if (hit) return;
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) walk(el.shadowRoot);
+      if (hit) return;
+      if (!el.tagName.endsWith('BUTTON')) continue;
+      if (!labels.includes(norm(el.innerText || el.textContent))) continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      hit = el;
+      return;
+    }
+  };
+  walk(document);
+  if (!hit) return null;
+  hit.click();
+  return 'run all';
+}"""
+
+
+def run_all(page):
+    for frame in page.frames:
+        try:
+            hit = frame.evaluate(RUN_ALL_JS)
+        except Exception:
+            continue
+        if hit:
+            return True
+    return False
+
+
+def accept_run(page, wait=20.0):
+    end = time.time() + wait
+    while time.time() < end:
+        for frame in page.frames:
+            try:
+                hit = frame.evaluate(CLICK_LABEL_JS)
+            except Exception:
+                continue
+            if hit:
+                log("accepted " + hit)
+                page.wait_for_timeout(2000)
+                return True
+        for frame in page.frames:
+            try:
+                if not frame.evaluate(HAS_DLG_JS):
+                    continue
+                cands = frame.evaluate(PICK_BTNS_JS)
+            except Exception:
+                continue
+            if not cands:
+                continue
+            hit = cands[-1]
+            try:
+                page.mouse.click(hit["x"], hit["y"])
+            except Exception:
+                continue
+            page.wait_for_timeout(2000)
+            try:
+                if not frame.evaluate(HAS_DLG_JS):
+                    log("confirmed dialog")
+                    return True
+            except Exception:
+                log("confirmed dialog")
+                return True
+        page.wait_for_timeout(500)
+    return False
+
+
+def ensure_connected(page, timeout):
+    end = time.time() + timeout
+    while time.time() < end:
+        if frame_call(page, CONNECT_JS):
+            log("connect requested")
+            page.wait_for_timeout(5000)
+            continue
+        try:
+            if page.locator(".cell.running").count() > 0:
+                return True
+            if page.locator("#connect-button").count() == 0:
+                return True
+        except Exception:
+            pass
+        page.wait_for_timeout(2000)
+    return False
+
+OUTPUT_JS = """() => {
+  const skip = '.CodeMirror, .cm-editor, .inputarea, .markdown, .editor, .monaco-editor';
+  const out = [];
+  document.querySelectorAll('pre').forEach(p => {
+    if (p.closest(skip)) return;
+    const st = window.getComputedStyle(p);
+    if (st.display === 'none' || st.visibility === 'hidden') return;
+    const t = p.innerText || p.textContent || '';
+    if (t.trim()) out.push(t);
+  });
+  return out.join('\\n');
+}"""
 
 
 def frames_text(page):
     parts = []
     for frame in page.frames:
         try:
-            blocks = frame.locator("pre")
-            for i in range(blocks.count()):
-                try:
-                    t = blocks.nth(i).inner_text(timeout=500)
-                except Exception:
-                    continue
-                if t:
-                    parts.append(t)
+            t = frame.evaluate(OUTPUT_JS)
         except Exception:
             continue
+        if t:
+            parts.append(t)
     return "\n".join(parts)
 
 
@@ -163,25 +457,49 @@ def wait_ready(page, timeout):
     return False
 
 
+def dismiss_warnings(page, rounds=8):
+    for _ in range(rounds):
+        found = False
+        for frame in page.frames:
+            try:
+                hit = frame.evaluate(CLICK_LABEL_JS)
+            except Exception:
+                continue
+            if hit:
+                log("dismissed " + hit)
+                found = True
+                page.wait_for_timeout(1500)
+                break
+        if not found:
+            return True
+    return False
+
+
 def stream(page, ctx, stop_when, limit, dump):
     end = time.time() + limit
-    last = 0
+    prev = ""
     marker_at = None
     while time.time() < end:
         if not alive(ctx):
             return False
         try:
-            accept_run(page)
             text = frames_text(page)
-            if len(text) > last:
-                for line in text[last:].splitlines():
+            if text != prev:
+                common = 0
+                for a, b in zip(prev, text):
+                    if a != b:
+                        break
+                    common += 1
+                for line in text[common:].splitlines():
                     if not line.startswith("@@") and len(line) < 400:
                         log(line)
-                last = len(text)
+                prev = text
                 dump.parent.mkdir(parents=True, exist_ok=True)
                 dump.write_text(text, encoding="utf-8")
+            dismiss_warnings(page)
             if stop_when in text and marker_at is None:
                 marker_at = time.time()
+                log(f"marker: {stop_when}")
             try:
                 running = page.locator(".cell.running").count()
             except Exception:
@@ -194,7 +512,7 @@ def stream(page, ctx, stop_when, limit, dump):
                 return False
             log(f"stream: {type(e).__name__}")
             page.wait_for_timeout(2000)
-    return False
+    return stop_when in prev
 
 
 def extract(text, out):
@@ -210,6 +528,128 @@ def extract(text, out):
         dest.write_bytes(base64.b64decode(b64[:size]))
         saved.append((str(dest), len(b64) * 3 // 4))
     return saved
+
+
+FIND_TEXT_JS = r"""(labels) => {
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  const res = [];
+  const walk = root => {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) walk(el.shadowRoot);
+      if (el.childElementCount) continue;
+      if (!labels.includes(norm(el.textContent))) continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      res.push({x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)});
+    }
+  };
+  walk(document);
+  return res;
+}"""
+
+
+def _find_chrome():
+    roots = [os.environ.get("PROGRAMFILES", ""), os.environ.get("PROGRAMFILES(X86)", ""), os.environ.get("LOCALAPPDATA", "")]
+    for root in roots:
+        if not root:
+            continue
+        exe = Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
+        if exe.exists():
+            return str(exe)
+    return None
+
+
+def _free_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _spawn(profile, headed, port):
+    exe = _find_chrome()
+    if not exe:
+        return None
+    cmd = [
+        exe,
+        "--user-data-dir=" + str(profile),
+        "--remote-debugging-port=" + str(port),
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=BlockThirdPartyCookies,TrackingProtection3pcd,ThirdPartyStoragePartitioning",
+        "--window-size=1440,960",
+    ]
+    if not headed:
+        cmd.append("--headless=new")
+    cmd.append("about:blank")
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    atexit.register(lambda: proc.poll() is None and proc.terminate())
+    endpoint = "http://127.0.0.1:%d" % port
+    for _ in range(60):
+        try:
+            urllib.request.urlopen(endpoint + "/json/version", timeout=2).read()
+            return endpoint
+        except Exception:
+            if proc.poll() is not None:
+                return None
+            time.sleep(1)
+    return None
+
+
+def connect(p, profile, headed):
+    endpoint = _spawn(profile, headed, _free_port())
+    if endpoint:
+        browser = p.chromium.connect_over_cdp(endpoint)
+        return browser.contexts[0] if browser.contexts else browser.new_context()
+    return p.chromium.launch_persistent_context(
+        user_data_dir=str(profile),
+        headless=not headed,
+        viewport={"width": 1440, "height": 960},
+        args=CHROME_ARGS,
+    )
+
+
+def find_text(page, labels):
+    for frame in page.frames:
+        try:
+            hits = frame.evaluate(FIND_TEXT_JS, labels)
+        except Exception:
+            continue
+        if hits:
+            return hits[0]
+    return None
+
+
+def running(page):
+    try:
+        return page.locator(".cell.running").count() > 0
+    except Exception:
+        return False
+
+
+def start_run(page):
+    if run_all(page):
+        page.wait_for_timeout(3000)
+        if accept_run(page, wait=10.0) or running(page):
+            log("run all clicked")
+            return True
+    page.keyboard.press("Control+F9")
+    page.wait_for_timeout(2500)
+    if accept_run(page, wait=8.0) or running(page):
+        return True
+    menu = find_text(page, ["Runtime", "Среда выполнения"])
+    if menu:
+        page.mouse.click(menu["x"], menu["y"])
+        page.wait_for_timeout(1800)
+        item = find_text(page, ["Run all", "Выполнить все"])
+        if item:
+            page.mouse.click(item["x"], item["y"])
+            page.wait_for_timeout(2500)
+            if accept_run(page, wait=15.0) or running(page):
+                return True
+    return accept_run(page, wait=10.0) or running(page)
 
 
 def main():
@@ -231,7 +671,24 @@ def main():
     ap.add_argument("--no-git", action="store_true")
     ap.add_argument("--dump", default="runs/colab_output.txt")
     ap.add_argument("--channel", default="chrome")
+    ap.add_argument("--login", action="store_true")
     args = ap.parse_args()
+
+    if args.login:
+        log("opening profile for google sign-in")
+        with sync_playwright() as p:
+            ctx = connect(p, args.profile, True)
+            page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            page.goto("https://accounts.google.com", wait_until="domcontentloaded", timeout=60000)
+            log("sign in then close browser")
+            try:
+                while alive(ctx):
+                    page.wait_for_timeout(5000)
+            except Exception:
+                pass
+            ctx.close()
+        return 0
+
 
     out = Path(args.out)
     nb_path = Path(args.notebook)
@@ -255,19 +712,22 @@ def main():
     log(f"open {url}")
 
     with sync_playwright() as p:
-        kw = dict(
-            user_data_dir=args.profile,
-            headless=not args.headed,
-            viewport={"width": 1440, "height": 960},
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        try:
-            ctx = p.chromium.launch_persistent_context(channel=args.channel, **kw)
-        except Exception:
-            ctx = p.chromium.launch_persistent_context(**kw)
-
+        prepare_profile(args.profile)
+        ctx = connect(p, args.profile, args.headed)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto(url, wait_until="domcontentloaded", timeout=120000)
+        opened = False
+        for attempt in range(4):
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=120000)
+                opened = True
+                break
+            except Exception as e:
+                log(f"open retry {attempt + 1}: {type(e).__name__}")
+                page.wait_for_timeout(15000)
+        if not opened:
+            log("error: cannot open notebook")
+            ctx.close()
+            return 1
         if not wait_ready(page, args.ready_wait * 1000):
             log("error: notebook did not open")
             try:
@@ -283,10 +743,39 @@ def main():
             ctx.close()
             return 1
         log("notebook ready")
+        if signed_out(page):
+            log("error: google sign-in required in profile " + args.profile)
+            if not args.headed:
+                ctx.close()
+                return 2
+            log("browser open, sign in then press Ctrl+C")
+            try:
+                while alive(ctx):
+                    page.wait_for_timeout(5000)
+            except KeyboardInterrupt:
+                pass
+            ctx.close()
+            return 2
         page.wait_for_timeout(1500)
-        page.keyboard.press("Control+F9")
-        page.wait_for_timeout(4000)
-        log("run all started")
+        try:
+            page.locator(".cell").first.click(timeout=5000)
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        page.wait_for_timeout(500)
+        ensure_connected(page, 30)
+        confirmed = False
+        for attempt in range(3):
+            if start_run(page):
+                confirmed = True
+                break
+            log("retry run all %d" % (attempt + 1))
+        log("run all started" if confirmed else "warn: run all not confirmed")
+        if not confirmed:
+            try:
+                page.screenshot(path=str(Path(args.dump).with_suffix(".png")))
+            except Exception:
+                pass
 
         stop = "pack done" if not args.no_artifacts else "train done"
         ok = stream(page, ctx, stop, args.timeout, Path(args.dump))
