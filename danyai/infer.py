@@ -97,7 +97,10 @@ class Engine:
                 continue
             arr = z[k]
             if qcfg and k in qcfg:
-                params[k] = arr.astype(np.float32) * np.float32(qcfg[k])
+                scale = np.asarray(qcfg[k], dtype=np.float32)
+                if scale.ndim == 1 and arr.ndim >= 2:
+                    scale = scale.reshape((-1,) + (1,) * (arr.ndim - 1))
+                params[k] = arr.astype(np.float32) * scale
             else:
                 params[k] = arr.astype(np.float32)
         if qcfg:

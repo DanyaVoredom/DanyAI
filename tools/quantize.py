@@ -19,13 +19,10 @@ def quantize(params, bits=8):
         if v.ndim < 2:
             out[k] = v
             continue
-        m = float(np.max(np.abs(v)))
-        if m <= 0:
-            out[k] = v
-            continue
-        s = m / qmax
-        out[k] = np.clip(np.round(v / s), -qmax, qmax).astype(np.int8)
-        qcfg[k] = float(s)
+        m = np.max(np.abs(v.reshape(v.shape[0], -1)), axis=1)
+        s = np.where(m > 0, m / qmax, 1.0).astype(np.float32)
+        out[k] = np.clip(np.round(v / s.reshape((-1,) + (1,) * (v.ndim - 1))), -qmax, qmax).astype(np.int8)
+        qcfg[k] = [float(x) for x in s]
     return out, qcfg
 
 
