@@ -89,6 +89,9 @@ def map_dolly(row):
 def map_saiga(row):
     if row.get("is_bad_by_regex"):
         return None
+    lang = row.get("language")
+    if lang and lang != "Russian":
+        return None
     msgs = row.get("messages") or []
     user = ""
     last = ""
@@ -97,7 +100,7 @@ def map_saiga(row):
         content = m.get("content") or ""
         if role == "user":
             user = content
-        elif role == "assistant" and user:
+        elif role in ("assistant", "bot") and user:
             last = content
     if not user or not last:
         return None
@@ -138,19 +141,21 @@ def main():
     ru_path = os.path.join(args.out, "instruct_ru.jsonl")
     counts = {"en": 0, "ru": 0}
 
-    with open(en_path, "w", encoding="utf-8") as f:
-        def sink_en(row):
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-            counts["en"] += 1
-        iter_pairs("tatsu-lab/alpaca", "default", "train", en_a, map_alpaca, sink_en)
-        iter_pairs("databricks/databricks-dolly-15k", "default", "train", en_d, map_dolly, sink_en)
+    if not args.skip_en:
+        with open(en_path, "w", encoding="utf-8") as f:
+            def sink_en(row):
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                counts["en"] += 1
+            iter_pairs("tatsu-lab/alpaca", "default", "train", en_a, map_alpaca, sink_en)
+            iter_pairs("databricks/databricks-dolly-15k", "default", "train", en_d, map_dolly, sink_en)
 
-    with open(ru_path, "w", encoding="utf-8") as f:
-        def sink_ru(row):
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-            counts["ru"] += 1
-        iter_pairs("IlyaGusev/saiga_scored", "default", "train", ru_s, map_saiga, sink_ru)
-        iter_pairs("Den4ikAI/russian_instructions", "default", "train", ru_d, map_den4ik, sink_ru)
+    if not args.skip_ru:
+        with open(ru_path, "w", encoding="utf-8") as f:
+            def sink_ru(row):
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                counts["ru"] += 1
+            iter_pairs("IlyaGusev/saiga_scored", "default", "train", ru_s, map_saiga, sink_ru)
+            iter_pairs("Den4ikAI/russian_instructions", "default", "train", ru_d, map_den4ik, sink_ru)
 
     print(f"instruct en {counts['en']} ru {counts['ru']}", flush=True)
 
