@@ -1,0 +1,14 @@
+[Unit]
+Description=DanyAI API server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/DanyAI
+ExecStart=/opt/DanyAI/.venv/bin/python -m danyai.server --ckpt runs/sft/best.npz --tok data/tokenizer.json --host 127.0.0.1 --port 8080
+Restart=always
+RestartSec=5
+Environment=OPENBLAS_NUM_THREADS=2
+
+[Install]
+WantedBy=multi-user.target
