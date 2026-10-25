@@ -78,6 +78,15 @@
     python tools/export_onnx.py --ckpt runs/modern/best.npz --out runs/onnx/model.onnx
     python tools/quantize.py --ckpt runs/modern/best.npz --out runs/int8/model_int8.npz
 
+## GPU и ускорение
+
+По умолчанию считается на CPU через numpy. Варианты ускорения:
+
+    DANYAI_GPU=1 python -m danyai.train ...        # cupy, CUDA-ядра
+    python -m danyai.torch_train --config configs/big.json --data data --out runs/big   # torch + AMP fp16
+
+Torch-тренер даёт максимальную скорость на T4: fused AdamW, fp16 autocast, TF32, тот же формат чекпоинта npz (совместим с numpy-движком, проверено по логитам). SFT: `python -m danyai.torch_sft`.
+
 ## Результаты
 
 Modern-2M на корпусе vocab 8192 (6 486 016 train-токенов), обучение на T4 через cupy, 2000 шагов:

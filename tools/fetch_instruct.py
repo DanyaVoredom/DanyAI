@@ -8,7 +8,7 @@ import urllib.parse
 ENDPOINT = "https://datasets-server.huggingface.co/rows"
 
 
-def fetch_rows(dataset, config, split, offset, length=100, tries=8):
+def fetch_rows(dataset, config, split, offset, length=100, tries=5):
     url = (ENDPOINT + "?dataset=" + urllib.parse.quote(dataset, safe="")
            + "&config=" + urllib.parse.quote(config, safe="")
            + "&split=" + urllib.parse.quote(split, safe="")
@@ -16,8 +16,8 @@ def fetch_rows(dataset, config, split, offset, length=100, tries=8):
     delay = 2.0
     for attempt in range(tries):
         r = subprocess.run(
-            ["curl.exe", "-sS", "-L", "--max-time", "90",
-             "--retry", "3", "--retry-delay", "2", "--retry-all-errors",
+            ["curl.exe", "-sS", "-L", "--max-time", "45",
+             "--retry", "2", "--retry-delay", "2", "--retry-all-errors",
              "-A", "danyai", url],
             capture_output=True, text=True, errors="replace",
         )
@@ -33,11 +33,15 @@ def fetch_rows(dataset, config, split, offset, length=100, tries=8):
     return {"rows": []}
 
 
-def iter_pairs(dataset, config, split, limit, mapper):
+def iter_pairs(dataset, config, split, limit, mapper, sink):
     offset = 0
     produced = 0
     while produced < limit:
-        data = fetch_rows(dataset, config, split, offset)
+        try:
+            data = fetch_rows(dataset, config, split, offset)
+        except Exception as e:
+            print(f"{dataset} offset {offset} failed: {e}", flush=True)
+            break
         rows = data.get("rows") or []
         if not rows:
             break
@@ -50,14 +54,14 @@ def iter_pairs(dataset, config, split, limit, mapper):
             assistant = assistant.strip()
             if len(user) < 2 or len(assistant) < 2:
                 continue
-            yield {"user": user, "assistant": assistant}
+            sink({"user": user, "assistant": assistant})
             produced += 1
             if produced >= limit:
                 break
         offset += len(rows)
         if offset % 2000 == 0:
-            print(f"{dataset} {offset} rows", flush=True)
-        time.sleep(0.4)
+            print(f"{dataset} offset {offset} produced {produced}", flush=True)
+        time.sleep(0.3)
 
 
 def map_alpaca(row):
@@ -121,14 +125,26 @@ def main():
     ru_s = args.ru_limit * 3 // 4
     ru_d = args.ru_limit - ru_s
 
-    en = list(iter_pairs("tatsu-lab/alpaca", "default", "train", en_a, map_alpaca))
-    en += list(iter_pairs("databricks/databricks-dolly-15k", "default", "train", en_d, map_dolly))
-    ru = list(iter_pairs("IlyaGusev/saiga_scored", "default", "train", ru_s, map_saiga))
-    ru += list(iter_pairs("Den4ikAI/russian_instructions", "default", "train", ru_d, map_den4ik))
+    os.makedirs(args.out, exist_ok=True)
+    en_path = os.path.join(args.out, "instruct_en.jsonl")
+    ru_path = os.path.join(args.out, "instruct_ru.jsonl")
+    counts = {"en": 0, "ru": 0}
 
-    n_en = write_jsonl(os.path.join(args.out, "instruct_en.jsonl"), en)
-    n_ru = write_jsonl(os.path.join(args.out, "instruct_ru.jsonl"), ru)
-    print(f"instruct en {n_en} ru {n_ru}", flush=True)
+    with open(en_path, "w", encoding="utf-8") as f:
+        def sink_en(row):
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            counts["en"] += 1
+        iter_pairs("tatsu-lab/alpaca", "default", "train", en_a, map_alpaca, sink_en)
+        iter_pairs("databricks/databricks-dolly-15k", "default", "train", en_d, map_dolly, sink_en)
+
+    with open(ru_path, "w", encoding="utf-8") as f:
+        def sink_ru(row):
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            counts["ru"] += 1
+        iter_pairs("IlyaGusev/saiga_scored", "default", "train", ru_s, map_saiga, sink_ru)
+        iter_pairs("Den4ikAI/russian_instructions", "default", "train", ru_d, map_den4ik, sink_ru)
+
+    print(f"instruct en {counts['en']} ru {counts['ru']}", flush=True)
 
 
 if __name__ == "__main__":
