@@ -127,7 +127,7 @@ Modern-2M на корпусе vocab 8192 (6 486 016 train-токенов), об�
 
 ## Хостинг
 
-Модель маленькая, хватает 1-2 vCPU и 1-2 GB RAM. Готовые файлы в deploy/: systemd-юнит и Dockerfile. Снаружи закрывать TLS и авторизацию через reverse-proxy или cloudflared.
+Модель 20M занимает 82 MB в fp32 и 24 MB в int8, на телефоне (Termux, aarch64, numpy) даёт около 23 токенов в секунду. Готовые файлы в deploy/: systemd-юнит и Dockerfile. Снаружи закрывать TLS и авторизацию через reverse-proxy или cloudflared.
 
 ## Проверки
 
