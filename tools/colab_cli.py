@@ -25,6 +25,16 @@ SETUP = """!pip -q install numpy
 !nvidia-smi --query-gpu=name,memory.total --format=csv || true
 print("setup done")"""
 
+SETUP_TORCH = """!pip -q install numpy
+%cd /content
+!rm -rf /content/DanyAI
+!git clone -q https://github.com/DanyaVoredom/DanyAI.git /content/DanyAI
+%cd /content/DanyAI
+!pip -q install -e .
+!nvidia-smi --query-gpu=name,memory.total --format=csv || true
+python -c "import torch; print('torch', torch.__version__, torch.cuda.is_available())"
+print("setup done")"""
+
 BUNDLE = """import base64, os, pathlib, urllib.request
 try:
     os.chdir("/content/DanyAI")
@@ -1053,7 +1063,8 @@ def main():
                  .replace("__STEPS__", str(args.steps))
                  .replace("__WARMUP__", str(args.warmup)))
         sft_cell = sft_tpl.replace("__RUNS__", args.runs)
-        cells = [SETUP, bundle_cell, train, sft_cell]
+        setup_cell = SETUP_TORCH if args.trainer == "torch" else SETUP
+        cells = [setup_cell, bundle_cell, train, sft_cell]
         if not args.no_artifacts:
             cells.append(PACK.replace("__RUNS__", args.runs))
             cells.append(PACK_SFT.replace("__RUNS__", args.runs))
