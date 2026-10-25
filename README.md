@@ -77,6 +77,21 @@
 
 Первый запуск в headed-режиме нужен один раз для входа в Google. Профиль сохраняется в %LOCALAPPDATA%\DanyAI\colab-profile. Скрипт собирает данные в gist, открывает ноутбук, включает GPU-бэкенд, запускает обучение и SFT, стримит логи и забирает чекпоинты в runs/. Флаги: `--steps`, `--batch`, `--block`, `--timeout`, `--connect-wait`, `--out`, `--no-artifacts`.
 
+## Обучение на телефоне
+
+Полностью офлайн, без Colab. Нужны только файлы корпуса (train.bin, val.bin, tokenizer.json, meta.json) и Termux.
+
+    pkg install python
+    pip install numpy
+    git clone https://github.com/DanyaVoredom/DanyAI ~/DanyAI
+    cd ~/DanyAI && pip install -e .
+    mkdir -p data_phone && cp /sdcard/Download/{train.bin,val.bin,tokenizer.json,meta.json} data_phone/
+    DATA_DIR=data_phone STEPS=12000 bash deploy/train_phone.sh
+
+Конфиг configs/phone.json: 4 слоя, 192, vocab 8192, блок 96, батч 8. Замеры на телефоне (6 ядер, aarch64, numpy): 2.45 с/шаг, 313 ток/с, 3.79M параметров. 12000 шагов это около 9.2M токенов, порядка 9 часов; чекпоинт пишется каждые 200 шагов, скрипт продолжает с runs/phone/ckpt.npz после перезапуска. Держится через termux-wake-lock.
+
+Лог: runs/phone/train.log. После обучения чекпоинт кладётся в models/model.npz и сервер отдаёт его тем же API.
+
 ## Экспорт
 
     python tools/export_onnx.py --ckpt runs/modern/best.npz --out runs/onnx/model.onnx
