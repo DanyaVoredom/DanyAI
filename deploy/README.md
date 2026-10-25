@@ -18,8 +18,15 @@
 
 ## Termux (Android)
 
-    bash deploy/termux.sh
+    bash deploy/termux_services.sh
     termux-wake-lock
+
+Скрипт регистрирует runit-сервисы danyai-server, danyai-webchat и danyai-train:
+они перезапускаются после падения процесса, логи пишутся в ~/DanyAI/logs/<сервис>/current,
+плюс создаётся ~/.termux/boot/danyai для автозапуска после перезагрузки (нужно приложение Termux:Boot).
+
+    sv status danyai-server
+    tail -f ~/DanyAI/logs/danyai-train/current
 
 Скрипт ждёт чекпоинт в models/model.npz и токенизатор в models/tokenizer.json.
 Без systemd автозапуск делается через termux-boot: положить `bash ~/DanyAI/deploy/termux.sh` в ~/.termux/boot/start-danyai.
