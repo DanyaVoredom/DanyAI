@@ -155,7 +155,7 @@ class GPT:
             src = state[k]
             if src.shape != v.data.shape:
                 raise ValueError(f"shape mismatch for {k}: {src.shape} vs {v.data.shape}")
-            v.data[...] = src
+            v.data[...] = xp.asarray(src)
 
     def num_params(self):
         return int(sum(v.data.size for v in self.params.values()))
