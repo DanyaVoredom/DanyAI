@@ -17,6 +17,7 @@ from playwright.sync_api import sync_playwright
 SETUP = """!pip -q install numpy
 !pip -q uninstall -y cupy-cuda12x || true
 !pip -q install cupy-cuda13x || true
+%cd /content
 !rm -rf /content/DanyAI
 !git clone -q https://github.com/DanyaVoredom/DanyAI.git /content/DanyAI
 %cd /content/DanyAI
@@ -25,6 +26,10 @@ SETUP = """!pip -q install numpy
 print("setup done")"""
 
 BUNDLE = """import base64, os, pathlib, urllib.request
+try:
+    os.chdir("/content/DanyAI")
+except Exception:
+    pass
 data_raw = "__DATA_RAW__"
 text = urllib.request.urlopen(data_raw).read().decode()
 os.makedirs("data", exist_ok=True)
