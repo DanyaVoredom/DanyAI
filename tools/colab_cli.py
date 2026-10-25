@@ -896,7 +896,7 @@ def wait_for_slot(page, timeout, check_every=60):
     return not blocked_sessions(page)
 
 
-def start_with_slot(page, first_cell, timeout, check_every=60):
+def start_with_slot(page, first_cell, timeout, check_every=180):
     end = time.time() + timeout
     attempt = 0
     while time.time() < end:
