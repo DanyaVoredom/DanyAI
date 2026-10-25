@@ -129,6 +129,8 @@ def main():
     ap.add_argument("--out", default="data")
     ap.add_argument("--en-limit", type=int, default=24000)
     ap.add_argument("--ru-limit", type=int, default=24000)
+    ap.add_argument("--skip-en", action="store_true")
+    ap.add_argument("--skip-ru", action="store_true")
     args = ap.parse_args()
 
     en_a = args.en_limit * 3 // 4
