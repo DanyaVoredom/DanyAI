@@ -215,13 +215,16 @@ class Engine:
             ids = [10]
         cache = self.new_cache(1)
         head = ids[-self.block:-1]
-        self.forward(np.asarray([head], dtype=np.int64), cache)
+        if head:
+            self.forward(np.asarray([head], dtype=np.int64), cache)
         out = bytearray()
         prev = ""
         for _ in range(int(tokens)):
             if cache["pos"] >= self.block:
                 cache = self.new_cache(1)
-                self.forward(np.asarray([ids[-self.block:-1]], dtype=np.int64), cache)
+                ctx = ids[-self.block:-1]
+                if ctx:
+                    self.forward(np.asarray([ctx], dtype=np.int64), cache)
             lg = self.next_logits([ids[-1]], cache)
             lg = apply_penalties(lg, ids, repetition, presence, frequency)
             nxt = sample_token(lg, rng, temp, top_k, top_p)

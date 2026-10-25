@@ -70,14 +70,6 @@ def lr_at(step, steps, base, warmup):
     return base * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * p)))
 
 
-def batch_ce(model, x, y):
-    logits = to_numpy(model.forward(x).data).astype(np.float64)
-    logits = logits - logits.max(-1, keepdims=True)
-    lse = np.log(np.exp(logits).sum(-1))
-    rows = np.arange(y.size)
-    return float((-logits.reshape(-1, logits.shape[-1])[rows, y.ravel()] + lse.ravel()).mean())
-
-
 def save(model, cfg, path, step=0, best=float("inf")):
     state = {k: to_numpy(v.data) for k, v in model.state().items()}
     np.savez(path, cfg=np.array(json.dumps(cfg)), step=np.array(step), best=np.array(best), **state)
@@ -137,7 +129,7 @@ def main():
         if step % cfg.get("eval_every", 200) == 0 or step == steps:
             xv, yv = get_batch(val, cfg["block_size"], cfg["batch_size"], rng)
             vl = to_scalar(model.loss(xv, yv).data)
-            ppl = math.exp(min(20.0, batch_ce(model, xv, yv)))
+            ppl = math.exp(min(20.0, vl))
             flag = ""
             if vl < best:
                 best = vl

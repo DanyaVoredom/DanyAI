@@ -15,8 +15,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 SETUP = """!pip -q install numpy
-!pip -q uninstall -y cupy-cuda13x || true
-!pip -q install cupy-cuda12x || true
+!pip -q uninstall -y cupy-cuda12x || true
+!pip -q install cupy-cuda13x || true
 !rm -rf /content/DanyAI
 !git clone -q https://github.com/DanyaVoredom/DanyAI.git /content/DanyAI
 %cd /content/DanyAI
