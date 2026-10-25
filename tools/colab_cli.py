@@ -565,6 +565,7 @@ def stream(page, ctx, stop_when, limit, dump):
     end = time.time() + limit
     prev = ""
     marker_at = None
+    err_at = None
     while time.time() < end:
         if not alive(ctx):
             return False
@@ -592,6 +593,14 @@ def stream(page, ctx, stop_when, limit, dump):
                 running = 1
             if marker_at and running == 0 and time.time() - marker_at > 8:
                 return True
+            if "Traceback (most recent call last)" in text and running == 0:
+                if err_at is None:
+                    err_at = time.time()
+                elif time.time() - err_at > 30:
+                    log("error marker in notebook output")
+                    return False
+            else:
+                err_at = None
             page.wait_for_timeout(3000)
         except Exception as e:
             if not alive(ctx):
@@ -865,6 +874,30 @@ def wait_for_slot(page, timeout, check_every=60):
     return not blocked_sessions(page)
 
 
+def start_with_slot(page, first_cell, timeout, check_every=60):
+    end = time.time() + timeout
+    attempt = 0
+    while time.time() < end:
+        attempt += 1
+        if blocked_sessions(page):
+            if attempt % 5 == 1:
+                log("session limit, waiting for a free colab slot")
+            close_dialogs(page)
+            page.wait_for_timeout(check_every * 1000)
+            frame_call(page, CONNECT_JS)
+            continue
+        if start_run(page, first_cell):
+            page.wait_for_timeout(8000)
+            if blocked_sessions(page):
+                close_dialogs(page)
+                page.wait_for_timeout(check_every * 1000)
+                continue
+            return True
+        log("run all retry %d" % attempt)
+        page.wait_for_timeout(5000)
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="")
@@ -1002,13 +1035,7 @@ def main():
         ensure_connected(page, 30)
         first_cell = editor_text(page).splitlines()[:1]
         first_cell = first_cell[0].strip() if first_cell else ""
-        confirmed = False
-        for attempt in range(3):
-            if start_run(page, first_cell):
-                confirmed = True
-                break
-            log("retry run all %d" % (attempt + 1))
-            page.wait_for_timeout(5000)
+        confirmed = start_with_slot(page, first_cell, args.connect_wait)
         log("run all started" if confirmed else "warn: run all not confirmed")
         if not confirmed:
             try:
