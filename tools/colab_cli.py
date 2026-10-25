@@ -36,6 +36,17 @@ import torch
 print("torch", torch.__version__, torch.cuda.is_available())
 print("setup done")"""
 
+SETUP_LORA = """!pip -q install -U transformers peft accelerate
+%cd /content
+!rm -rf /content/DanyAI
+!git clone -q https://github.com/DanyaVoredom/DanyAI.git /content/DanyAI
+%cd /content/DanyAI
+!pip -q install -e .
+!nvidia-smi --query-gpu=name,memory.total --format=csv || true
+import torch
+print("torch", torch.__version__, torch.cuda.is_available())
+print("setup done")"""
+
 BUNDLE = """import base64, os, pathlib, urllib.request
 try:
     os.chdir("/content/DanyAI")
@@ -112,6 +123,26 @@ print("train done")"""
 SFT_TORCH = """!python -m danyai.torch_sft --ckpt __RUNS__/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out __RUNS__/sft --steps 1500 --batch 8 --lr 1e-4 --block 384
 !python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Придумай короткую историю про кота.<assistant|>" --tokens 120 --temp 0.7
 print("sft done")"""
+
+TRAIN_LORA = """!python tools/finetune_lora.py --model __MODEL__ --data data/sft.jsonl --out __RUNS__/lora --max-len 1024 --batch 4 --grad-accum 4 --lr 1e-4 --warmup 30 --epochs 1 --eval-share 0.005 --eval-every 100 --limit __LIMIT__ --fallback Qwen/Qwen2.5-1.5B-Instruct
+print("lora done")"""
+
+PACK_LORA = """import base64, pathlib, zipfile
+src = pathlib.Path("__RUNS__/lora")
+zp = pathlib.Path("__RUNS__/lora.zip")
+if src.exists():
+    with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(src.rglob("*")):
+            if f.is_file():
+                z.write(f, f.relative_to(src))
+    b = base64.b64encode(zp.read_bytes()).decode()
+    print(f"@@BEGIN __RUNS__/lora.zip {len(b)}")
+    for i in range(0, len(b), 50000):
+        print(b[i:i + 50000])
+    print("@@END __RUNS__/lora.zip")
+else:
+    print("@@MISSING __RUNS__/lora")
+print("pack lora done")"""
 
 PACK = """import base64, pathlib
 for name in ["data/tokenizer.json", "data/meta.json", "configs/colab.json"]:
@@ -1004,7 +1035,7 @@ def main():
     ap.add_argument("--config", default="configs/modern.json")
     ap.add_argument("--runs", default="/content/danyai_runs")
     ap.add_argument("--data-release", default="")
-    ap.add_argument("--trainer", default="autograd", choices=["autograd", "torch"])
+    ap.add_argument("--trainer", default="autograd", choices=["autograd", "torch", "lora"])
     ap.add_argument("--timeout", type=int, default=21600)
     ap.add_argument("--connect-wait", type=int, default=5400)
     ap.add_argument("--ready-wait", type=int, default=180)
@@ -1012,6 +1043,8 @@ def main():
     ap.add_argument("--no-artifacts", action="store_true")
     ap.add_argument("--no-git", action="store_true")
     ap.add_argument("--dump", default="runs/colab_output.txt")
+    ap.add_argument("--model", default="Qwen/Qwen3.5-2B")
+    ap.add_argument("--lora-limit", type=int, default=0)
     ap.add_argument("--channel", default="chrome")
     ap.add_argument("--login", action="store_true")
     args = ap.parse_args()
@@ -1054,21 +1087,29 @@ def main():
             data_raw = f"https://gist.githubusercontent.com/{user}/{gid}/raw/danyai_data.bundle"
             log(f"data raw {data_raw}")
             bundle_cell = BUNDLE.replace("__DATA_RAW__", data_raw)
-        tpl = TRAIN_TORCH if args.trainer == "torch" else TRAIN
-        sft_tpl = SFT_TORCH if args.trainer == "torch" else SFT
-        train = (tpl
-                 .replace("__CONFIG__", args.config)
-                 .replace("__RUNS__", args.runs)
-                 .replace("__BLOCK__", str(args.block))
-                 .replace("__BATCH__", str(args.batch))
-                 .replace("__STEPS__", str(args.steps))
-                 .replace("__WARMUP__", str(args.warmup)))
-        sft_cell = sft_tpl.replace("__RUNS__", args.runs)
-        setup_cell = SETUP_TORCH if args.trainer == "torch" else SETUP
-        cells = [setup_cell, bundle_cell, train, sft_cell]
-        if not args.no_artifacts:
-            cells.append(PACK.replace("__RUNS__", args.runs))
-            cells.append(PACK_SFT.replace("__RUNS__", args.runs))
+        if args.trainer == "lora":
+            train = (TRAIN_LORA.replace("__MODEL__", args.model)
+                     .replace("__RUNS__", args.runs)
+                     .replace("__LIMIT__", str(args.lora_limit)))
+            cells = [SETUP_LORA, bundle_cell, train]
+            if not args.no_artifacts:
+                cells.append(PACK_LORA.replace("__RUNS__", args.runs))
+        else:
+            tpl = TRAIN_TORCH if args.trainer == "torch" else TRAIN
+            sft_tpl = SFT_TORCH if args.trainer == "torch" else SFT
+            train = (tpl
+                     .replace("__CONFIG__", args.config)
+                     .replace("__RUNS__", args.runs)
+                     .replace("__BLOCK__", str(args.block))
+                     .replace("__BATCH__", str(args.batch))
+                     .replace("__STEPS__", str(args.steps))
+                     .replace("__WARMUP__", str(args.warmup)))
+            sft_cell = sft_tpl.replace("__RUNS__", args.runs)
+            setup_cell = SETUP_TORCH if args.trainer == "torch" else SETUP
+            cells = [setup_cell, bundle_cell, train, sft_cell]
+            if not args.no_artifacts:
+                cells.append(PACK.replace("__RUNS__", args.runs))
+                cells.append(PACK_SFT.replace("__RUNS__", args.runs))
         nb = notebook(cells)
         nb_path.parent.mkdir(parents=True, exist_ok=True)
         nb_path.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
