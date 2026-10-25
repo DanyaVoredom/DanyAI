@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "danyai"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local language model family"
 requires-python = ">=3.10"
 dependencies = ["numpy"]
 
 [project.optional-dependencies]
 colab = ["playwright"]
+hf = ["torch", "transformers", "peft", "accelerate"]
 
 [tool.setuptools.packages.find]
 include = ["danyai*"]

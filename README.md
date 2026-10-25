@@ -1,6 +1,6 @@
 # DanyAI
 
-Локальная линейка языковых моделей, обученных с нуля. Реализация на numpy, без torch. Считает на CPU, при наличии CUDA работает через cupy.
+Локальная линейка языковых моделей. Своя модель обучается с нуля на numpy (CPU), для CUDA есть cupy и torch-тренер с AMP. Отдельно поддерживается дообучение готовых моделей (LoRA) и OpenAI-совместимый сервер для них.
 
 ## Линейка
 
@@ -29,6 +29,9 @@
 - danyai/bench.py - замер скорости шага
 - tools/export_onnx.py - экспорт в ONNX
 - tools/quantize.py - int8-квантование чекпоинта
+- tools/finetune_lora.py - LoRA/QLoRA для Qwen/Gemma, чат и tool calling
+- tools/fetch_instruct.py, tools/fetch_tools.py - instruct и tool-calling данные
+- danyai/hf_server.py - OpenAI API поверх transformers и LoRA, SSE и tools
 - tests/gradcheck.py - численная проверка градиентов
 - tests/smoke.py - сквозной прогон на синтетике
 
@@ -86,6 +89,20 @@
     python -m danyai.torch_train --config configs/big.json --data data --out runs/big   # torch + AMP fp16
 
 Torch-тренер даёт максимальную скорость на T4: fused AdamW, fp16 autocast, TF32, тот же формат чекпоинта npz (совместим с numpy-движком, проверено по логитам). SFT: `python -m danyai.torch_sft`.
+
+## Двуязычная модель и LoRA
+
+Корпус: русская проза, TinyStories, Gutenberg, 20.6M символов, 9.57M train-токенов, vocab 8192.
+Instruct: alpaca, dolly, saiga, russian_instructions (20k пар RU+EN), tool calling: hermes-function-calling (3.9k).
+
+    python tools/fetch_instruct.py --out data
+    python tools/fetch_tools.py --out data --limit 9000
+    python tools/merge_instruct.py --en data/instruct_en.jsonl --ru data/instruct_ru.jsonl --out data/sft.jsonl --limit 20000
+    python tools/finetune_lora.py --model huihui-ai/Huihui-Qwen3.5-2B-abliterated \
+        --data data/sft.jsonl,data/tools.jsonl --out runs/lora --max-len 768 --batch 4 --grad-accum 4
+
+База для чата - abliterated-версия без отказов; tool calling поддержан в адаптере и в сервере.
+Сервер: `python -m danyai.hf_server --model <base> --adapter runs/lora`. Детали в deploy/hf.md.
 
 ## Результаты
 
