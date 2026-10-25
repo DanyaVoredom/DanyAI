@@ -27,17 +27,20 @@ EOF
   chmod +x "$dir/log/run"
 }
 
-server_body='cd "$HOME/DanyAI" || exit 1
+server_body='sleep 5
+cd "$HOME/DanyAI" || exit 1
 termux-wake-lock 2>/dev/null
 export OPENBLAS_NUM_THREADS=2
 exec python -m danyai.server --ckpt models/model.npz --tok models/tokenizer.json --host 0.0.0.0 --port 8080 2>&1'
 
-webchat_body='cd "$HOME/DanyAI" || exit 1
+webchat_body='sleep 5
+cd "$HOME/DanyAI" || exit 1
 termux-wake-lock 2>/dev/null
 export OPENBLAS_NUM_THREADS=2
 exec python -m danyai.webchat --ckpt models/model.npz --tok models/tokenizer.json --host 0.0.0.0 --port 8090 2>&1'
 
-train_body="cd \"\$HOME/DanyAI\" || exit 1
+train_body="sleep 60
+cd \"\$HOME/DanyAI\" || exit 1
 termux-wake-lock 2>/dev/null
 mkdir -p runs/phone
 if python -c \"import numpy as np,sys; z=np.load('runs/phone/ckpt.npz'); sys.exit(0 if int(z['step']) >= $STEPS else 1)\" 2>/dev/null; then
