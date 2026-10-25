@@ -59,9 +59,21 @@ class Handler(BaseHTTPRequestHandler):
             "seed": int(req.get("seed", 0)),
         }
 
+    def _allowed(self):
+        key = STATE.get("key", "")
+        if not key:
+            return True
+        auth = self.headers.get("Authorization", "")
+        if auth == "Bearer " + key:
+            return True
+        return self.headers.get("X-Api-Key", "") == key
+
     def do_POST(self):
         if self.path not in ("/generate", "/v1/completions", "/v1/chat/completions"):
             self._send(404, {"error": "not found"})
+            return
+        if not self._allowed():
+            self._send(401, {"error": "unauthorized"})
             return
         try:
             req, prompt = self._parse()
@@ -124,10 +136,12 @@ def main():
     ap.add_argument("--tok", default="data/tokenizer.json")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--api-key", default="")
     args = ap.parse_args()
 
     STATE["engine"], STATE["cfg"] = Engine.from_file(args.ckpt)
     STATE["tok"] = BPETokenizer.load(args.tok)
+    STATE["key"] = args.api_key
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"http://{args.host}:{args.port}/generate", flush=True)
     srv.serve_forever()

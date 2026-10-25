@@ -52,7 +52,7 @@
 
 ## Сервер и веб-чат
 
-    python -m danyai.server --ckpt runs/sft/best.npz --tok data/tokenizer.json --host 0.0.0.0 --port 8080
+    python -m danyai.server --ckpt runs/sft/best.npz --tok data/tokenizer.json --host 0.0.0.0 --port 8080 --api-key SECRET
     python -m danyai.webchat --ckpt runs/sft/best.npz --tok data/tokenizer.json --port 8090
 
 Эндпоинты: `/health`, `/v1/models`, `/v1/completions`, `/v1/chat/completions`, `/generate`. Стриминг через `"stream": true` (SSE).
