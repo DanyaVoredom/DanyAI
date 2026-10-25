@@ -36,12 +36,19 @@ def fetch_rows(dataset, config, split, offset, length=100, tries=5):
 def iter_pairs(dataset, config, split, limit, mapper, sink):
     offset = 0
     produced = 0
+    fails = 0
     while produced < limit:
         try:
             data = fetch_rows(dataset, config, split, offset)
+            fails = 0
         except Exception as e:
-            print(f"{dataset} offset {offset} failed: {e}", flush=True)
-            break
+            fails += 1
+            print(f"{dataset} offset {offset} failed ({fails}): {e}", flush=True)
+            if fails >= 25:
+                break
+            offset += 100
+            time.sleep(2.0)
+            continue
         rows = data.get("rows") or []
         if not rows:
             break
@@ -58,10 +65,11 @@ def iter_pairs(dataset, config, split, limit, mapper, sink):
             produced += 1
             if produced >= limit:
                 break
+        fails = 0
         offset += len(rows)
         if offset % 2000 == 0:
             print(f"{dataset} offset {offset} produced {produced}", flush=True)
-        time.sleep(0.3)
+        time.sleep(1.2)
 
 
 def map_alpaca(row):

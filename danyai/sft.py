@@ -38,6 +38,8 @@ def build_ids(tok, row, block):
     y = np.array(ids[1:], dtype=np.int64)
     cut = min(len(prompt) - 1, y.size)
     y[:max(0, cut)] = -100
+    if cut >= y.size:
+        return None
     return x, y
 
 
@@ -110,7 +112,7 @@ def main():
         if step % log_every == 0:
             print(f"step {step} loss {to_scalar(loss.data):.4f} lr {lr:.2e} gn {gn:.2f} "
                   f"{time.time() - t0:.0f}s", flush=True)
-        if step % max(1, args.steps // 5) == 0 or step == args.steps:
+        if val and (step % max(1, args.steps // 5) == 0 or step == args.steps):
             eb = max(1, min(args.batch, 8))
             tot = 0.0
             cnt = 0
