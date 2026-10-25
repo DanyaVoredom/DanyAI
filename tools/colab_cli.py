@@ -105,7 +105,7 @@ print(cfg, flush=True)
 print("train done")"""
 
 SFT = """!DANYAI_GPU=1 python -m danyai.sft --ckpt __RUNS__/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out __RUNS__/sft --steps 1200 --batch 8 --lr 1e-4 --block 256
-!DANYAI_GPU=1 python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Write a short story about a cat.<assistant|>" --tokens 120 --temp 0.7
+!DANYAI_GPU=1 python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Write a short story about a cat.<|assistant|>" --tokens 120 --temp 0.7
 print("sft done")"""
 
 TRAIN_TORCH = """import json, os
@@ -121,7 +121,7 @@ print(cfg, flush=True)
 print("train done")"""
 
 SFT_TORCH = """!python -m danyai.torch_sft --ckpt __RUNS__/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out __RUNS__/sft --steps 1500 --batch 8 --lr 1e-4 --block 384
-!python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Придумай короткую историю про кота.<assistant|>" --tokens 120 --temp 0.7
+!python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Придумай короткую историю про кота.<|assistant|>" --tokens 120 --temp 0.7
 print("sft done")"""
 
 TRAIN_LORA = """!python tools/finetune_lora.py --model __MODEL__ --data data/sft.jsonl --out __RUNS__/lora --max-len 1024 --batch 4 --grad-accum 4 --lr 1e-4 --warmup 30 --epochs 1 --eval-share 0.005 --eval-every 100 --limit __LIMIT__ --fallback Qwen/Qwen2.5-1.5B-Instruct
