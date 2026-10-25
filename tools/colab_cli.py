@@ -818,6 +818,53 @@ def gist_parts(gist_url):
     return m.group(1), m.group(2)
 
 
+def blocked_sessions(page):
+    for frame in page.frames:
+        try:
+            t = frame.inner_text("body").lower()
+        except Exception:
+            continue
+        if "слишком много" in t or "too many" in t or "maximum number of sessions" in t:
+            return True
+    return False
+
+
+def close_dialogs(page):
+    js = r"""() => {
+      const labels = ['Отмена', 'Cancel', 'Закрыть', 'Close'];
+      for (const b of document.querySelectorAll('button, [role=button]')) {
+        const t = (b.innerText || b.textContent || '').trim();
+        if (!labels.includes(t)) continue;
+        const r = b.getBoundingClientRect();
+        if (r.width && r.height) { b.click(); return t; }
+      }
+      return null;
+    }"""
+    for frame in page.frames:
+        try:
+            hit = frame.evaluate(js)
+        except Exception:
+            continue
+        if hit:
+            return hit
+    return None
+
+
+def wait_for_slot(page, timeout, check_every=60):
+    end = time.time() + timeout
+    attempt = 0
+    while time.time() < end:
+        attempt += 1
+        if not blocked_sessions(page):
+            return True
+        log(f"session limit hit, closing dialog and retrying ({attempt})")
+        close_dialogs(page)
+        page.wait_for_timeout(3000)
+        frame_call(page, CONNECT_JS)
+        page.wait_for_timeout(check_every * 1000)
+    return not blocked_sessions(page)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="")
@@ -832,6 +879,7 @@ def main():
     ap.add_argument("--warmup", type=int, default=200)
     ap.add_argument("--data", default="data")
     ap.add_argument("--timeout", type=int, default=21600)
+    ap.add_argument("--connect-wait", type=int, default=5400)
     ap.add_argument("--ready-wait", type=int, default=180)
     ap.add_argument("--keep-open", action="store_true")
     ap.add_argument("--no-artifacts", action="store_true")
@@ -941,6 +989,16 @@ def main():
         except Exception:
             pass
         page.wait_for_timeout(500)
+        if blocked_sessions(page):
+            log(f"colab session limit, waiting up to {args.connect_wait}s")
+            close_dialogs(page)
+            if not wait_for_slot(page, args.connect_wait):
+                log("error: could not free a colab session slot")
+                teardown(ctx, proc, args.profile)
+                return 4
+            log("session slot free")
+            page.reload(wait_until="domcontentloaded", timeout=120000)
+            page.wait_for_timeout(6000)
         ensure_connected(page, 30)
         first_cell = editor_text(page).splitlines()[:1]
         first_cell = first_cell[0].strip() if first_cell else ""
