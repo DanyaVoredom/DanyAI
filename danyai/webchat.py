@@ -15,7 +15,6 @@ button{margin-top:8px;padding:8px 16px;border-radius:6px;border:1px solid #444;b
 </style></head><body>
 <h3>DanyAI</h3>
 <div id="log"></div>
-<div id="log"></div>
 <textarea id="prompt" rows="3" placeholder="сообщение"></textarea>
 <div class="row">
 <input id="temp" value="0.8"><input id="top_p" value="0.95"><input id="tokens" value="200">
@@ -59,7 +58,7 @@ async function go(){
     const {value,done}=await rd.read();
     if(done)break;
     buf+=dec.decode(value,{stream:true});
-    const lines=buf.split('\n');
+    const lines=buf.split(String.fromCharCode(10));
     buf=lines.pop();
     for(const line of lines){
       if(!line.startsWith('data: '))continue;
