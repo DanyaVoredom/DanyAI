@@ -98,7 +98,7 @@ print(cfg, flush=True)
 !python -m danyai.sample --ckpt __RUNS__/best.npz --tok data/tokenizer.json --prompt "Once upon a time" --tokens 120 --temp 0.8
 print("train done")"""
 
-SFT_TORCH = """!python -m danyai.torch_sft --ckpt __RUNS__/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out __RUNS__/sft --steps 1500 --batch 8 --lr 1e-4 --block 256
+SFT_TORCH = """!python -m danyai.torch_sft --ckpt __RUNS__/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out __RUNS__/sft --steps 1500 --batch 8 --lr 1e-4 --block 384
 !python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Придумай короткую историю про кота.<assistant|>" --tokens 120 --temp 0.7
 print("sft done")"""
 
