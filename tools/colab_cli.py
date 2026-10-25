@@ -70,7 +70,7 @@ SFT = """!DANYAI_GPU=1 python -m danyai.sft --ckpt runs/colab/best.npz --data da
 print("sft done")"""
 
 PACK = """import base64, pathlib
-for name in ["runs/colab/best.npz", "runs/sft/best.npz", "data/tokenizer.json", "data/meta.json", "configs/colab.json"]:
+for name in ["data/tokenizer.json", "data/meta.json", "configs/colab.json"]:
     p = pathlib.Path(name)
     if not p.exists():
         print("@@MISSING", name)
@@ -80,6 +80,28 @@ for name in ["runs/colab/best.npz", "runs/sft/best.npz", "data/tokenizer.json", 
     for i in range(0, len(b), 50000):
         print(b[i:i + 50000])
     print(f"@@END {name}")
+import base64, pathlib
+p = pathlib.Path("runs/colab/best.npz")
+if p.exists():
+    b = base64.b64encode(p.read_bytes()).decode()
+    print(f"@@BEGIN runs/colab/best.npz {len(b)}")
+    for i in range(0, len(b), 50000):
+        print(b[i:i + 50000])
+    print("@@END runs/colab/best.npz")
+else:
+    print("@@MISSING runs/colab/best.npz")
+print("pack a done")"""
+
+PACK_SFT = """import base64, pathlib
+p = pathlib.Path("runs/sft/best.npz")
+if p.exists():
+    b = base64.b64encode(p.read_bytes()).decode()
+    print(f"@@BEGIN runs/sft/best.npz {len(b)}")
+    for i in range(0, len(b), 50000):
+        print(b[i:i + 50000])
+    print("@@END runs/sft/best.npz")
+else:
+    print("@@MISSING runs/sft/best.npz")
 print("pack done")"""
 
 
@@ -961,6 +983,7 @@ def main():
         cells = [SETUP, bundle_cell, train, SFT]
         if not args.no_artifacts:
             cells.append(PACK)
+            cells.append(PACK_SFT)
         nb = notebook(cells)
         nb_path.parent.mkdir(parents=True, exist_ok=True)
         nb_path.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
