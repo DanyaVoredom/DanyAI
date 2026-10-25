@@ -53,7 +53,7 @@ class AdamW:
             self.v[k] += (1 - self.b2) * g * g
             if p.data.ndim >= 2:
                 p.data -= lr * self.wd * p.data
-            p.data -= (lr / c1) * self.m[k] / (np.sqrt(self.v[k] / c2) + self.eps)
+            p.data -= (lr / c1) * self.m[k] / (xp.sqrt(self.v[k] / c2) + self.eps)
 
 
 def get_batch(data, block, batch, rng):

@@ -23,6 +23,7 @@ def to_scalar(a):
 
 def scatter_add(arr, idx, val):
     if GPU:
-        cp.scatter_add(arr, idx, val)
+        import cupyx
+        cupyx.scatter_add(arr, idx, val)
     else:
         np.add.at(arr, idx, val)

@@ -1,5 +1,5 @@
 import numpy as np
-from .backend import xp, to_numpy, scatter_add
+from .backend import xp, to_numpy, to_scalar, scatter_add
 
 DTYPE = xp.float32
 
@@ -107,8 +107,8 @@ def transpose(t, axes):
     return out
 
 
-_GELU_C = xp.float32(xp.sqrt(2.0 / 3.141592653589793))
-_GELU_A = xp.float32(0.044715)
+_GELU_C = np.float32(np.sqrt(2.0 / 3.141592653589793))
+_GELU_A = np.float32(0.044715)
 _GELU_3A = xp.float32(3.0 * 0.044715)
 _HALF = xp.float32(0.5)
 _ONE = xp.float32(1.0)
@@ -301,7 +301,7 @@ def cross_entropy(logits, targets):
     y = targets.ravel()
     rows = xp.arange(y.size)
     keep = y >= 0
-    n = int(keep.sum())
+    n = int(to_scalar(keep.sum()))
     if n:
         loss = -xp.log(flat[rows[keep], y[keep]] + 1e-9).mean()
     else:
