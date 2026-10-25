@@ -1,0 +1,7 @@
+{
+  "vocab_size": 8192,
+  "dtype": "uint16",
+  "train_tokens": 9400407,
+  "val_tokens": 191846,
+  "chars": 20606289
+}
