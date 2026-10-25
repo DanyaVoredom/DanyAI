@@ -1,0 +1,22 @@
+{
+  "name": "DanyAI-Phone",
+  "n_layer": 4,
+  "n_head": 4,
+  "n_embd": 192,
+  "batch_size": 8,
+  "lr": 0.001,
+  "steps": 12000,
+  "block_size": 96,
+  "weight_decay": 0.1,
+  "log_every": 20,
+  "eval_every": 500,
+  "save_every": 200,
+  "seed": 1337,
+  "norm": "rms",
+  "ffn": "swiglu",
+  "rope": true,
+  "n_kv_head": 2,
+  "rope_base": 10000.0,
+  "warmup": 200,
+  "grad_clip": 1.0
+}
