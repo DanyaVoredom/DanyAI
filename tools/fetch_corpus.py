@@ -28,22 +28,30 @@ def curl(url, dst, timeout=180):
 
 
 def cyr_score(t):
-    return sum(1 for ch in t if ch == "ё" or "а" <= ch.lower() <= "я")
+    low = 0
+    up = 0
+    for ch in t:
+        if ch == "ё" or "а" <= ch <= "я":
+            low += 1
+        elif "А" <= ch <= "Я" or ch == "Ё":
+            up += 1
+    return low - 2 * up
 
 
 def decode_ru(raw):
     head = raw[:4096].lower()
+    declared = ""
     if b"koi8" in head:
-        return raw.decode("koi8-r", errors="replace")
-    if b"windows-1251" in head or b"cp1251" in head:
-        return raw.decode("cp1251", errors="replace")
+        declared = "koi8-r"
+    elif b"windows-1251" in head or b"cp1251" in head:
+        declared = "cp1251"
     best = None
     for enc in ("utf-8", "koi8-r", "cp1251"):
         try:
             t = raw.decode(enc)
         except UnicodeDecodeError:
             continue
-        n = cyr_score(t)
+        n = cyr_score(t) + (2000 if enc == declared else 0)
         if best is None or n > best[0]:
             best = (n, t)
     if best is None:
