@@ -42,8 +42,13 @@ class Handler(BaseHTTPRequestHandler):
         if not prompt and isinstance(req.get("messages"), list):
             parts = []
             for m in req["messages"]:
-                parts.append(str(m.get("role", "user")) + ": " + str(m.get("content", "")))
-            prompt = "\n".join(parts) + "\nassistant:"
+                role = str(m.get("role", "user"))
+                content = str(m.get("content", ""))
+                if role == "assistant":
+                    parts.append(content + "<|end|>")
+                elif role in ("user", "system"):
+                    parts.append(f"<|user|>{content}<|assistant|>")
+            prompt = "".join(parts)
         return req, prompt
 
     @staticmethod

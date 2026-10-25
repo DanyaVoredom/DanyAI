@@ -15,35 +15,71 @@ button{margin-top:8px;padding:8px 16px;border-radius:6px;border:1px solid #444;b
 </style></head><body>
 <h3>DanyAI</h3>
 <div id="log"></div>
-<textarea id="prompt" rows="3" placeholder="prompt"></textarea>
+<div id="log"></div>
+<textarea id="prompt" rows="3" placeholder="сообщение"></textarea>
 <div class="row">
 <input id="temp" value="0.8"><input id="top_p" value="0.95"><input id="tokens" value="200">
 </div>
-<button onclick="go()">generate</button>
+<button onclick="go()">send</button>
+<button onclick="reset()">reset</button>
 <script>
 const log=document.getElementById('log');
+let turns=[];
+function render(){
+  log.innerHTML='';
+  for(const t of turns){
+    const d=document.createElement('div');
+    d.textContent=(t.role==='user'?'you: ':'ai: ')+t.content;
+    log.appendChild(d);
+  }
+  log.scrollTop=log.scrollHeight;
+}
+function reset(){turns=[];render();}
 async function go(){
-  log.textContent='';
-  const body={prompt:document.getElementById('prompt').value,
+  const box=document.getElementById('prompt');
+  const text=box.value.trim();
+  if(!text)return;
+  box.value='';
+  turns.push({role:'user',content:text});
+  render();
+  let prompt='';
+  for(const t of turns){
+    prompt+=t.role==='user'?'<|user|>'+t.content+'<|assistant|>':t.content+'<|end|>';
+  }
+  const body={prompt:prompt,
     temperature:parseFloat(document.getElementById('temp').value),
     top_p:parseFloat(document.getElementById('top_p').value),
     max_tokens:parseInt(document.getElementById('tokens').value),stream:true};
   const r=await fetch('/v1/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(!r.ok){log.textContent=await r.text();return;}
-  const rd=r.body.getReader();const dec=new TextDecoder();let buf='';
+  if(!r.ok){turns.push({role:'ai',content:'error: '+await r.text()});render();return;}
+  turns.push({role:'ai',content:''});
+  const rd=r.body.getReader();const dec=new TextDecoder();
+  let buf='';
   while(true){
     const {value,done}=await rd.read();
     if(done)break;
     buf+=dec.decode(value,{stream:true});
-    const parts=buf.split('\\n\\n');buf=parts.pop();
-    for(const p of parts){
-      const line=p.split('\\n').find(x=>x.startsWith('data: '));
-      if(!line)continue;
-      const data=line.slice(6);
-      if(data==='[DONE]')return;
-      try{const j=JSON.parse(data);const d=j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content;if(d)log.textContent+=d;}catch(e){}
+    const lines=buf.split('\n');
+    buf=lines.pop();
+    for(const line of lines){
+      if(!line.startsWith('data: '))continue;
+      const payload=line.slice(6);
+      if(payload==='[DONE]')continue;
+      let j;
+      try{j=JSON.parse(payload);}catch(e){continue;}
+      const piece=j.choices&&j.choices[0]&&j.choices[0].delta&&j.choices[0].delta.content;
+      if(!piece)continue;
+      turns[turns.length-1].content+=piece;
+      if(turns[turns.length-1].content.includes('<|end|>'))break;
+      render();
     }
   }
+  const last=turns[turns.length-1];
+  for(const stop of ['<|end|>','<|user|>','<|assistant|>']){
+    const i=last.content.indexOf(stop);
+    if(i>=0)last.content=last.content.slice(0,i);
+  }
+  render();
 }
 </script></body></html>
 """
