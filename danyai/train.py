@@ -4,6 +4,7 @@ import math
 import os
 import time
 import numpy as np
+from .backend import xp, to_numpy, to_scalar
 from .model import GPT
 from .tensor import backward
 
@@ -18,8 +19,8 @@ class AdamW:
         self.eps = eps
         self.wd = wd
         self.t = 0
-        self.m = [np.zeros_like(p.data) for _, p in named]
-        self.v = [np.zeros_like(p.data) for _, p in named]
+        self.m = [xp.zeros_like(p.data) for _, p in named]
+        self.v = [xp.zeros_like(p.data) for _, p in named]
 
     def zero(self):
         for _, p in self.named:
@@ -29,7 +30,7 @@ class AdamW:
         total = 0.0
         for _, p in self.named:
             if p.grad is not None:
-                total += float((p.grad.astype(np.float64) ** 2).sum())
+                total += float(to_numpy((p.grad.astype(xp.float64) ** 2).sum()))
         total = math.sqrt(total)
         if total > max_norm:
             s = max_norm / (total + 1e-6)
@@ -70,7 +71,7 @@ def lr_at(step, steps, base, warmup):
 
 
 def batch_ce(model, x, y):
-    logits = model.forward(x).data.astype(np.float64)
+    logits = to_numpy(model.forward(x).data).astype(np.float64)
     logits = logits - logits.max(-1, keepdims=True)
     lse = np.log(np.exp(logits).sum(-1))
     rows = np.arange(y.size)
@@ -78,7 +79,8 @@ def batch_ce(model, x, y):
 
 
 def save(model, cfg, path, step=0, best=float("inf")):
-    np.savez(path, cfg=np.array(json.dumps(cfg)), step=np.array(step), best=np.array(best), **model.state())
+    state = {k: to_numpy(v.data) for k, v in model.state().items()}
+    np.savez(path, cfg=np.array(json.dumps(cfg)), step=np.array(step), best=np.array(best), **state)
 
 
 def main():
@@ -131,10 +133,10 @@ def main():
 
         if step % cfg.get("log_every", 10) == 0:
             el = time.time() - t0
-            print(f"step {step} loss {float(loss.data):.4f} lr {lr:.2e} gn {gn:.2f} {el:.0f}s", flush=True)
+            print(f"step {step} loss {to_scalar(loss.data):.4f} lr {lr:.2e} gn {gn:.2f} {el:.0f}s", flush=True)
         if step % cfg.get("eval_every", 200) == 0 or step == steps:
             xv, yv = get_batch(val, cfg["block_size"], cfg["batch_size"], rng)
-            vl = float(model.loss(xv, yv).data)
+            vl = to_scalar(model.loss(xv, yv).data)
             ppl = math.exp(min(20.0, batch_ce(model, xv, yv)))
             flag = ""
             if vl < best:

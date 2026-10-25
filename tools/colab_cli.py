@@ -15,6 +15,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 SETUP = """!pip -q install numpy
+!pip -q install cupy-cuda12x || true
 !rm -rf /content/DanyAI
 !git clone -q https://github.com/DanyaVoredom/DanyAI.git /content/DanyAI
 %cd /content/DanyAI
@@ -48,19 +49,23 @@ for line in text.splitlines():
 flush()
 print("data", sorted(os.listdir("data")))"""
 
-TRAIN = """import json
+TRAIN = """import json, os
+os.environ["DANYAI_GPU"] = "1"
+import numpy as np
+from danyai.backend import GPU
+print("GPU", GPU)
 cfg = json.load(open("configs/modern.json"))
 cfg.update(block_size=__BLOCK__, batch_size=__BATCH__, steps=__STEPS__, lr=0.002, warmup=__WARMUP__)
 cfg["name"] = "DanyAI-Modern-Colab"
 cfg["log_every"] = 1
 json.dump(cfg, open("configs/colab.json", "w"), indent=2)
 print(cfg, flush=True)
-!python -m danyai.train --config configs/colab.json --data data --out runs/colab
-!python -m danyai.sample --ckpt runs/colab/best.npz --tok data/tokenizer.json --prompt "Once upon a time" --tokens 120 --temp 0.8
+!DANYAI_GPU=1 python -m danyai.train --config configs/colab.json --data data --out runs/colab
+!DANYAI_GPU=1 python -m danyai.sample --ckpt runs/colab/best.npz --tok data/tokenizer.json --prompt "Once upon a time" --tokens 120 --temp 0.8
 print("train done")"""
 
-SFT = """!python -m danyai.sft --ckpt runs/colab/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out runs/sft --steps 600 --batch 4 --lr 2e-4
-!python -m danyai.sample --ckpt runs/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Write a short story about a cat.<|assistant|>" --tokens 200 --temp 0.7
+SFT = """!DANYAI_GPU=1 python -m danyai.sft --ckpt runs/colab/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out runs/sft --steps 600 --batch 4 --lr 2e-4
+!DANYAI_GPU=1 python -m danyai.sample --ckpt runs/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Write a short story about a cat.<|assistant|>" --tokens 120 --temp 0.7
 print("sft done")"""
 
 PACK = """import base64, pathlib

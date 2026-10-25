@@ -1,6 +1,7 @@
 import numpy as np
+from .backend import xp, to_numpy, scatter_add
 
-DTYPE = np.float32
+DTYPE = xp.float32
 
 
 def _acc(a, b):
@@ -23,7 +24,7 @@ class T:
     __slots__ = ("data", "grad", "requires_grad", "_parents", "_backward")
 
     def __init__(self, data, requires_grad=False, parents=(), backward=None):
-        self.data = np.asarray(data, dtype=DTYPE)
+        self.data = xp.asarray(data, dtype=DTYPE)
         self.grad = None
         self.requires_grad = requires_grad
         self._parents = parents
@@ -97,7 +98,7 @@ def reshape(t, shape):
 
 def transpose(t, axes):
     out = T(t.data.transpose(axes), t.requires_grad, (t,))
-    inv = tuple(int(i) for i in np.argsort(axes))
+    inv = tuple(int(i) for i in to_numpy(xp.argsort(xp.asarray(axes))))
 
     def bw():
         t.grad = _acc(t.grad, out.grad.transpose(inv))
@@ -106,18 +107,18 @@ def transpose(t, axes):
     return out
 
 
-_GELU_C = np.float32(np.sqrt(2.0 / np.pi))
-_GELU_A = np.float32(0.044715)
-_GELU_3A = np.float32(3.0 * 0.044715)
-_HALF = np.float32(0.5)
-_ONE = np.float32(1.0)
+_GELU_C = xp.float32(xp.sqrt(2.0 / 3.141592653589793))
+_GELU_A = xp.float32(0.044715)
+_GELU_3A = xp.float32(3.0 * 0.044715)
+_HALF = xp.float32(0.5)
+_ONE = xp.float32(1.0)
 
 
 def gelu(t):
     x = t.data
     x2 = x * x
     u = _GELU_C * (x + _GELU_A * x2 * x)
-    th = np.tanh(u)
+    th = xp.tanh(u)
     out = T(_HALF * x * (_ONE + th), t.requires_grad, (t,))
 
     def bw():
@@ -133,7 +134,7 @@ def gelu(t):
 
 def silu(t):
     x = t.data
-    s = 1.0 / (1.0 + np.exp(-x))
+    s = 1.0 / (1.0 + xp.exp(-x))
     out = T(x * s, t.requires_grad, (t,))
 
     def bw():
@@ -150,12 +151,12 @@ def split_last(t, k):
     b = T(t.data[..., k:], t.requires_grad, (t,))
 
     def bw_a():
-        g = np.zeros_like(t.data)
+        g = xp.zeros_like(t.data)
         g[..., :k] = a.grad
         t.grad = _acc(t.grad, g)
 
     def bw_b():
-        g = np.zeros_like(t.data)
+        g = xp.zeros_like(t.data)
         g[..., k:] = b.grad
         t.grad = _acc(t.grad, g)
 
@@ -165,7 +166,7 @@ def split_last(t, k):
 
 
 def concat_last(a, b):
-    out = T(np.concatenate([a.data, b.data], axis=-1),
+    out = T(xp.concatenate([a.data, b.data], axis=-1),
             a.requires_grad or b.requires_grad, (a, b))
     k = a.data.shape[-1]
 
@@ -182,7 +183,7 @@ def concat_last(a, b):
 def repeat_heads(t, rep):
     if rep == 1:
         return t
-    out = T(np.repeat(t.data, rep, axis=1), t.requires_grad, (t,))
+    out = T(xp.repeat(t.data, rep, axis=1), t.requires_grad, (t,))
 
     def bw():
         g = out.grad
@@ -196,7 +197,7 @@ def repeat_heads(t, rep):
 
 def rmsnorm(x, g, eps=1e-5):
     xd = x.data
-    rstd = np.float32(1.0) / np.sqrt((xd * xd).mean(-1, keepdims=True) + eps)
+    rstd = xp.float32(1.0) / xp.sqrt((xd * xd).mean(-1, keepdims=True) + eps)
     xhat = xd * rstd
     out = T(xhat * g.data, x.requires_grad or g.requires_grad, (x, g))
     axes = tuple(range(xd.ndim - 1))
@@ -220,7 +221,7 @@ def layernorm(x, g, b, eps=1e-5):
     mu = xd.mean(-1, keepdims=True)
     xc = xd - mu
     var = (xc * xc).mean(-1, keepdims=True)
-    rstd = np.float32(1.0) / np.sqrt(var + eps)
+    rstd = xp.float32(1.0) / xp.sqrt(var + eps)
     xhat = xc * rstd
     out = T(xhat * g.data + b.data, x.requires_grad or g.requires_grad or b.requires_grad, (x, g, b))
     axes = tuple(range(xd.ndim - 1))
@@ -247,14 +248,14 @@ def rope(t, cos, sin):
     half = x.shape[-1] // 2
     x1 = x[..., :half]
     x2 = x[..., half:]
-    out = T(np.concatenate([x1 * cos - x2 * sin, x1 * sin + x2 * cos], axis=-1),
+    out = T(xp.concatenate([x1 * cos - x2 * sin, x1 * sin + x2 * cos], axis=-1),
             t.requires_grad, (t,))
 
     def bw():
         g = out.grad
         g1 = g[..., :half]
         g2 = g[..., half:]
-        d = np.concatenate([g1 * cos + g2 * sin, -g1 * sin + g2 * cos], axis=-1)
+        d = xp.concatenate([g1 * cos + g2 * sin, -g1 * sin + g2 * cos], axis=-1)
         t.grad = _acc(t.grad, d)
 
     out._backward = bw
@@ -263,7 +264,7 @@ def rope(t, cos, sin):
 
 def softmax(x):
     z = x.data - x.data.max(-1, keepdims=True)
-    e = np.exp(z)
+    e = xp.exp(z)
     p = e / e.sum(-1, keepdims=True)
     out = T(p, x.requires_grad, (x,))
 
@@ -277,12 +278,12 @@ def softmax(x):
 
 
 def embedding(w, idx):
-    idx = np.asarray(idx)
+    idx = xp.asarray(idx)
     out = T(w.data[idx], w.requires_grad, (w,))
 
     def bw():
-        g = np.zeros_like(w.data)
-        np.add.at(g, idx.ravel(), out.grad.reshape(-1, w.data.shape[-1]))
+        g = xp.zeros_like(w.data)
+        scatter_add(g, xp.asarray(idx).ravel(), out.grad.reshape(-1, w.data.shape[-1]))
         w.grad = _acc(w.grad, g)
 
     out._backward = bw
@@ -290,28 +291,28 @@ def embedding(w, idx):
 
 
 def cross_entropy(logits, targets):
-    targets = np.asarray(targets)
+    targets = xp.asarray(targets)
     x = logits.data
     z = x - x.max(-1, keepdims=True)
-    e = np.exp(z)
+    e = xp.exp(z)
     p = e / e.sum(-1, keepdims=True)
     v = p.shape[-1]
     flat = p.reshape(-1, v)
     y = targets.ravel()
-    rows = np.arange(y.size)
+    rows = xp.arange(y.size)
     keep = y >= 0
     n = int(keep.sum())
     if n:
-        loss = -np.log(flat[rows[keep], y[keep]] + 1e-9).mean()
+        loss = -xp.log(flat[rows[keep], y[keep]] + 1e-9).mean()
     else:
-        loss = np.float32(0.0)
+        loss = xp.float32(0.0)
     out = T(loss, logits.requires_grad, (logits,))
 
     def bw():
         d = flat.copy()
         if n:
             d[rows[keep], y[keep]] -= 1.0
-            d *= np.float32(1.0 / n)
+            d *= xp.float32(1.0 / n)
         else:
             d[...] = 0
         logits.grad = _acc(logits.grad, d.reshape(logits.data.shape))
@@ -332,7 +333,7 @@ def backward(root):
         topo.append(t)
 
     visit(root)
-    root.grad = np.ones_like(root.data)
+    root.grad = xp.ones_like(root.data)
     for t in reversed(topo):
         if t._backward is not None and t.grad is not None:
             t._backward()

@@ -5,6 +5,7 @@ import time
 import numpy as np
 from .model import GPT
 from .train import AdamW, lr_at, save
+from .backend import to_scalar
 from .tensor import backward
 from .tokenizer import BPETokenizer
 
@@ -107,11 +108,11 @@ def main():
         gn = opt.clip(cfg.get("grad_clip", 1.0))
         opt.step(lr)
         if step % log_every == 0:
-            print(f"step {step} loss {float(loss.data):.4f} lr {lr:.2e} gn {gn:.2f} "
+            print(f"step {step} loss {to_scalar(loss.data):.4f} lr {lr:.2e} gn {gn:.2f} "
                   f"{time.time() - t0:.0f}s", flush=True)
         if step % max(1, args.steps // 5) == 0 or step == args.steps:
             xv, yv = pad(val)
-            vl = float(model.loss(xv, yv).data)
+            vl = to_scalar(model.loss(xv, yv).data)
             flag = ""
             if vl < best:
                 best = vl

@@ -1,5 +1,6 @@
 import math
 import numpy as np
+from .backend import xp
 from .tensor import (
     T, add, mul, matmul, gelu, silu, rope, repeat_heads,
     layernorm, rmsnorm, softmax, embedding, cross_entropy, reshape, transpose,
@@ -67,7 +68,7 @@ class GPT:
 
     def mask(self, Tn):
         if self._mask is None or self._mask.shape[0] < Tn:
-            m = np.triu(np.full((Tn, Tn), -1e9, dtype=np.float32), 1)
+            m = xp.triu(xp.full((Tn, Tn), -1e9, dtype=xp.float32), 1)
             self._mask = m
         return self._mask[:Tn, :Tn]
 
@@ -79,10 +80,10 @@ class GPT:
         hd = D // H
         half = hd // 2
         base = float(self.cfg.get("rope_base", 10000.0))
-        inv = base ** (-np.arange(half, dtype=np.float64) * 2.0 / hd)
-        pos = np.arange(Tn, dtype=np.float64)[:, None]
+        inv = base ** (-xp.arange(half, dtype=xp.float64) * 2.0 / hd)
+        pos = xp.arange(Tn, dtype=xp.float64)[:, None]
         ang = pos * inv[None, :]
-        self._rope = np.stack([np.cos(ang), np.sin(ang)], axis=0).astype(np.float32)
+        self._rope = xp.stack([xp.cos(ang), xp.sin(ang)], axis=0).astype(xp.float32)
         return self._rope
 
     def norm(self, x, name):
@@ -124,7 +125,7 @@ class GPT:
         return add(matmul(gelu(h), P[f"h{i}.w2"]), P[f"h{i}.b2"])
 
     def forward(self, idx):
-        idx = np.asarray(idx, dtype=np.int64)
+        idx = xp.asarray(idx, dtype=xp.int64)
         B, Tn = idx.shape
         P = self.params
         if self.rope:
