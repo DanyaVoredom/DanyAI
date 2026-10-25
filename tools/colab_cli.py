@@ -32,7 +32,8 @@ SETUP_TORCH = """!pip -q install numpy
 %cd /content/DanyAI
 !pip -q install -e .
 !nvidia-smi --query-gpu=name,memory.total --format=csv || true
-python -c "import torch; print('torch', torch.__version__, torch.cuda.is_available())"
+import torch
+print("torch", torch.__version__, torch.cuda.is_available())
 print("setup done")"""
 
 BUNDLE = """import base64, os, pathlib, urllib.request
