@@ -83,7 +83,7 @@ try:
 except Exception:
     pass
 base = "__BASE__"
-for name in ["train.bin", "val.bin", "tokenizer.json", "meta.json", "sft.jsonl"]:
+for name in ["train.bin", "val.bin", "tokenizer.json", "meta.json", "sft.jsonl", "tools.jsonl"]:
     dst = pathlib.Path("data", name)
     dst.parent.mkdir(parents=True, exist_ok=True)
     urllib.request.urlretrieve(base + name, dst)
