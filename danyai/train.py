@@ -71,7 +71,7 @@ def lr_at(step, steps, base, warmup):
 
 
 def save(model, cfg, path, step=0, best=float("inf")):
-    state = {k: to_numpy(v.data) for k, v in model.state().items()}
+    state = {k: to_numpy(v) for k, v in model.state().items()}
     np.savez(path, cfg=np.array(json.dumps(cfg)), step=np.array(step), best=np.array(best), **state)
 
 

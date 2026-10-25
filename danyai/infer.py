@@ -103,6 +103,7 @@ class Engine:
         if qcfg:
             cfg = dict(cfg)
             cfg["quantized"] = True
+        z.close()
         return cls(cfg, params), cfg
 
     def new_cache(self, batch=1):
