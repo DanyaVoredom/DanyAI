@@ -1,0 +1,22 @@
+{
+  "name": "DanyAI-Big-Bilingual",
+  "n_layer": 8,
+  "n_head": 6,
+  "n_embd": 384,
+  "batch_size": 32,
+  "lr": 0.0006,
+  "steps": 12000,
+  "block_size": 256,
+  "weight_decay": 0.1,
+  "log_every": 10,
+  "eval_every": 1000,
+  "save_every": 1000,
+  "seed": 1337,
+  "norm": "rms",
+  "ffn": "swiglu",
+  "rope": true,
+  "n_kv_head": 2,
+  "rope_base": 10000.0,
+  "warmup": 500,
+  "grad_clip": 1.0
+}

@@ -55,23 +55,35 @@ for line in text.splitlines():
 flush()
 print("data", sorted(os.listdir("data")))"""
 
+BUNDLE_RELEASE = """import os, pathlib, urllib.request
+try:
+    os.chdir("/content/DanyAI")
+except Exception:
+    pass
+base = "__BASE__"
+for name in ["train.bin", "val.bin", "tokenizer.json", "meta.json", "sft.jsonl"]:
+    dst = pathlib.Path("data", name)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    urllib.request.urlretrieve(base + name, dst)
+    print("got", name, dst.stat().st_size)
+print("data", sorted(os.listdir("data")))"""
+
 TRAIN = """import json, os
 os.environ["DANYAI_GPU"] = "1"
 import numpy as np
 from danyai.backend import GPU
 print("GPU", GPU)
-cfg = json.load(open("configs/modern.json"))
-cfg.update(block_size=__BLOCK__, batch_size=__BATCH__, steps=__STEPS__, lr=0.002, warmup=__WARMUP__)
-cfg["name"] = "DanyAI-Modern-Colab"
+cfg = json.load(open("__CONFIG__"))
+cfg.update(block_size=__BLOCK__, batch_size=__BATCH__, steps=__STEPS__, warmup=__WARMUP__)
 cfg["log_every"] = 1
 json.dump(cfg, open("configs/colab.json", "w"), indent=2)
 print(cfg, flush=True)
-!DANYAI_GPU=1 python -m danyai.train --config configs/colab.json --data data --out runs/colab
-!DANYAI_GPU=1 python -m danyai.sample --ckpt runs/colab/best.npz --tok data/tokenizer.json --prompt "Once upon a time" --tokens 120 --temp 0.8
+!DANYAI_GPU=1 python -m danyai.train --config configs/colab.json --data data --out __RUNS__ $( [ -f __RUNS__/ckpt.npz ] && echo --resume __RUNS__/ckpt.npz )
+!DANYAI_GPU=1 python -m danyai.sample --ckpt __RUNS__/best.npz --tok data/tokenizer.json --prompt "Once upon a time" --tokens 120 --temp 0.8
 print("train done")"""
 
-SFT = """!DANYAI_GPU=1 python -m danyai.sft --ckpt runs/colab/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out runs/sft --steps 600 --batch 4 --lr 2e-4
-!DANYAI_GPU=1 python -m danyai.sample --ckpt runs/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Write a short story about a cat.<|assistant|>" --tokens 120 --temp 0.7
+SFT = """!DANYAI_GPU=1 python -m danyai.sft --ckpt __RUNS__/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out __RUNS__/sft --steps 1200 --batch 8 --lr 1e-4 --block 256
+!DANYAI_GPU=1 python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Write a short story about a cat.<assistant|>" --tokens 120 --temp 0.7
 print("sft done")"""
 
 PACK = """import base64, pathlib
@@ -86,27 +98,27 @@ for name in ["data/tokenizer.json", "data/meta.json", "configs/colab.json"]:
         print(b[i:i + 50000])
     print(f"@@END {name}")
 import base64, pathlib
-p = pathlib.Path("runs/colab/best.npz")
+p = pathlib.Path("__RUNS__/best.npz")
 if p.exists():
     b = base64.b64encode(p.read_bytes()).decode()
-    print(f"@@BEGIN runs/colab/best.npz {len(b)}")
+    print(f"@@BEGIN __RUNS__/best.npz {len(b)}")
     for i in range(0, len(b), 50000):
         print(b[i:i + 50000])
-    print("@@END runs/colab/best.npz")
+    print("@@END __RUNS__/best.npz")
 else:
-    print("@@MISSING runs/colab/best.npz")
+    print("@@MISSING __RUNS__/best.npz")
 print("pack a done")"""
 
 PACK_SFT = """import base64, pathlib
-p = pathlib.Path("runs/sft/best.npz")
+p = pathlib.Path("__RUNS__/sft/best.npz")
 if p.exists():
     b = base64.b64encode(p.read_bytes()).decode()
-    print(f"@@BEGIN runs/sft/best.npz {len(b)}")
+    print(f"@@BEGIN __RUNS__/sft/best.npz {len(b)}")
     for i in range(0, len(b), 50000):
         print(b[i:i + 50000])
-    print("@@END runs/sft/best.npz")
+    print("@@END __RUNS__/sft/best.npz")
 else:
-    print("@@MISSING runs/sft/best.npz")
+    print("@@MISSING __RUNS__/sft/best.npz")
 print("pack done")"""
 
 
@@ -927,6 +939,28 @@ def start_with_slot(page, first_cell, timeout, check_every=180):
     return False
 
 
+def repo_slug():
+    r = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
+    url = r.stdout.strip()
+    m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
+    if not m:
+        raise RuntimeError("cannot parse origin url: " + url)
+    return m.group(1)
+
+
+def upload_data_release(tag, data_dir, names):
+    paths = [str(Path(data_dir) / n) for n in names if (Path(data_dir) / n).exists()]
+    if not paths:
+        raise RuntimeError("no data files to upload")
+    subprocess.run(["gh", "release", "create", tag, "--title", tag,
+                    "--notes", "danyai corpus bundle"], capture_output=True, check=False)
+    r = subprocess.run(["gh", "release", "upload", tag] + paths + ["--clobber"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip() or "release upload failed")
+    log(f"uploaded {len(paths)} files to release {tag}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="")
@@ -940,6 +974,9 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--warmup", type=int, default=200)
     ap.add_argument("--data", default="data")
+    ap.add_argument("--config", default="configs/modern.json")
+    ap.add_argument("--runs", default="/content/danyai_runs")
+    ap.add_argument("--data-release", default="")
     ap.add_argument("--timeout", type=int, default=21600)
     ap.add_argument("--connect-wait", type=int, default=5400)
     ap.add_argument("--ready-wait", type=int, default=180)
@@ -974,23 +1011,33 @@ def main():
     if args.url:
         url = args.url
     else:
-        bundle_path = out / "danyai_data.bundle"
-        make_data_bundle(args.data, bundle_path)
-        gist_data = publish(bundle_path, "danyai data bundle")
-        user, gid = gist_parts(gist_data)
-        data_raw = f"https://gist.githubusercontent.com/{user}/{gid}/raw/danyai_data.bundle"
-        log(f"data raw {data_raw}")
-
-        bundle_cell = BUNDLE.replace("__DATA_RAW__", data_raw)
+        names = ["train.bin", "val.bin", "tokenizer.json", "meta.json", "sft.jsonl"]
+        if args.data_release:
+            repo = repo_slug()
+            base = f"https://github.com/{repo}/releases/download/{args.data_release}/"
+            upload_data_release(args.data_release, args.data, names)
+            log(f"data release {base}")
+            bundle_cell = BUNDLE_RELEASE.replace("__BASE__", base)
+        else:
+            bundle_path = out / "danyai_data.bundle"
+            make_data_bundle(args.data, bundle_path)
+            gist_data = publish(bundle_path, "danyai data bundle")
+            user, gid = gist_parts(gist_data)
+            data_raw = f"https://gist.githubusercontent.com/{user}/{gid}/raw/danyai_data.bundle"
+            log(f"data raw {data_raw}")
+            bundle_cell = BUNDLE.replace("__DATA_RAW__", data_raw)
         train = (TRAIN
+                 .replace("__CONFIG__", args.config)
+                 .replace("__RUNS__", args.runs)
                  .replace("__BLOCK__", str(args.block))
                  .replace("__BATCH__", str(args.batch))
                  .replace("__STEPS__", str(args.steps))
                  .replace("__WARMUP__", str(args.warmup)))
-        cells = [SETUP, bundle_cell, train, SFT]
+        sft_cell = SFT.replace("__RUNS__", args.runs)
+        cells = [SETUP, bundle_cell, train, sft_cell]
         if not args.no_artifacts:
-            cells.append(PACK)
-            cells.append(PACK_SFT)
+            cells.append(PACK.replace("__RUNS__", args.runs))
+            cells.append(PACK_SFT.replace("__RUNS__", args.runs))
         nb = notebook(cells)
         nb_path.parent.mkdir(parents=True, exist_ok=True)
         nb_path.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
