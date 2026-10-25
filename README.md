@@ -106,6 +106,16 @@ Instruct: alpaca, dolly, saiga, russian_instructions (20k пар RU+EN), tool ca
 
 ## Результаты
 
+DanyAI-Big 20M (8x384, vocab 8192, корпус 9.57M train-токенов, T4, torch+AMP, 6000 шагов):
+
+| Чекпоинт | val loss | perplexity | блок |
+|---|---|---|---|
+| danyai-big-20m | 1.4177 | 4.13 | 256 |
+| danyai-big-20m-sft | 1.3872 | 4.00 (chat) | 384 |
+
+Perplexity SFT-чекпоинта на прозе val.bin: 6.87 при блоке 384 - ожидаемый сдвиг после дообучения на диалоги.
+ONNX совпадает с numpy (max_abs 2.05e-05, argmax 100%), int8 с per-row масштабами - 0.45 и 97.7% argmax.
+
 Modern-2M на корпусе vocab 8192 (6 486 016 train-токенов), обучение на T4 через cupy, 2000 шагов:
 
 | Чекпоинт | val loss | perplexity |
