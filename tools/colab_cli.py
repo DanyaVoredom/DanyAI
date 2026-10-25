@@ -22,26 +22,48 @@ SETUP = """!pip -q install numpy
 !nvidia-smi --query-gpu=name,memory.total --format=csv || true
 print("setup done")"""
 
-TRAIN = """import os, json, subprocess
-os.makedirs("data/raw", exist_ok=True)
-ids = [1342, 11, 1661, 2701, 84, 98, 345, 5200, 16328, 2600]
-for i in ids:
-    subprocess.run(["curl", "-s", "-L",
-                    f"https://www.gutenberg.org/cache/epub/{i}/pg{i}.txt",
-                    "-o", f"data/raw/pg{i}.txt"], check=False)
-print("corpus files", len(os.listdir("data/raw")))
-!python -m danyai.prepare --input data/raw --out data --vocab __VOCAB__ --val 0.02
-cfg = json.load(open("configs/mini.json"))
-cfg.update(block_size=__BLOCK__, batch_size=__BATCH__, steps=__STEPS__, lr=0.0015, warmup=__WARMUP__)
-cfg["name"] = "DanyAI-Mini-Colab"
+BUNDLE = """import base64, os, pathlib, urllib.request
+data_raw = "__DATA_RAW__"
+text = urllib.request.urlopen(data_raw).read().decode()
+os.makedirs("data", exist_ok=True)
+cur = None
+buf = []
+def flush():
+    global cur, buf
+    if cur is None:
+        return
+    b64 = "".join(buf)
+    pathlib.Path("data", cur).write_bytes(base64.b64decode(b64))
+    print("wrote", cur, len(b64) * 3 // 4)
+    cur = None
+    buf = []
+for line in text.splitlines():
+    if line.startswith("@@FILE "):
+        flush()
+        cur = line.split()[1]
+    elif line.startswith("@@END"):
+        flush()
+    else:
+        buf.append(line.strip())
+flush()
+print("data", sorted(os.listdir("data")))"""
+
+TRAIN = """import json
+cfg = json.load(open("configs/modern.json"))
+cfg.update(block_size=__BLOCK__, batch_size=__BATCH__, steps=__STEPS__, lr=0.002, warmup=__WARMUP__)
+cfg["name"] = "DanyAI-Modern-Colab"
 json.dump(cfg, open("configs/colab.json", "w"), indent=2)
 print(cfg)
 !python -m danyai.train --config configs/colab.json --data data --out runs/colab
-!python -m danyai.sample --ckpt runs/colab/best.npz --tok data/tokenizer.json --prompt "The house" --tokens 200 --temp 0.8
+!python -m danyai.sample --ckpt runs/colab/best.npz --tok data/tokenizer.json --prompt "Once upon a time" --tokens 200 --temp 0.8
 print("train done")"""
 
+SFT = """!python -m danyai.sft --ckpt runs/colab/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out runs/sft --steps 600 --batch 4 --lr 2e-4
+!python -m danyai.sample --ckpt runs/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Write a short story about a cat.<|assistant|>" --tokens 200 --temp 0.7
+print("sft done")"""
+
 PACK = """import base64, pathlib
-for name in ["runs/colab/best.npz", "data/tokenizer.json", "data/meta.json", "configs/colab.json"]:
+for name in ["runs/colab/best.npz", "runs/sft/best.npz", "data/tokenizer.json", "data/meta.json", "configs/colab.json"]:
     p = pathlib.Path(name)
     if not p.exists():
         print("@@MISSING", name)
@@ -135,6 +157,8 @@ def prepare_profile(profile):
     prof = data.setdefault("profile", {})
     prof["cookie_controls_mode"] = 0
     prof["block_third_party_cookies"] = False
+    prof["exit_type"] = "Normal"
+    prof["exited_cleanly"] = True
     pref.write_text(json.dumps(data), encoding="utf-8")
 
 
@@ -160,6 +184,16 @@ def blocker(page):
     if "Блокнот не найден" in text:
         return "missing"
     return None
+
+
+def login_dialog(page):
+    for frame in page.frames:
+        try:
+            if frame.evaluate(LOGIN_DLG_JS):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 
@@ -260,6 +294,17 @@ def signed_out(page):
     return False
 
 
+LOGIN_DLG_JS = """() => {
+  const t = (document.body.innerText || "").toLowerCase();
+  if (t.indexOf("\\u0432\\u043e\\u0439\\u0434\\u0438\\u0442\\u0435 \\u0432 \\u0430\\u043a\\u043a\\u0430\\u0443\\u043d\\u0442 google") < 0) return false;
+  for (const d of document.querySelectorAll("dialog, [role=dialog], md-dialog, .cdk-overlay-pane")) {
+    const r = d.getBoundingClientRect();
+    if (r.width > 150 && r.height > 80) return true;
+  }
+  return false;
+}"""
+
+
 HAS_DLG_JS = """() => {
   for (const d of document.querySelectorAll("dialog, [role=dialog]")) {
     const r = d.getBoundingClientRect();
@@ -301,7 +346,7 @@ PICK_BTNS_JS = """() => {
 
 
 CLICK_LABEL_JS = r"""() => {
-  const labels = ['\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c', 'Run anyway', '\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0432\u0441\u0435', 'Run all', 'Run'];
+  const labels = ['\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c', 'Run anyway', '\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0432\u0441\u0451', '\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0432\u0441\u0435', 'Run all', 'Run'];
   const norm = s => (s || '').replace(/\s+/g, ' ').trim();
   let hit = null;
   const walk = root => {
@@ -329,8 +374,31 @@ CLICK_LABEL_JS = r"""() => {
 }"""
 
 
+CELLS_JS = r"""() => {
+  const out = [];
+  document.querySelectorAll('.cell.code').forEach(c => {
+    const ta = c.querySelector('textarea.inputarea');
+    if (!ta) return;
+    const v = (ta.value || ta.textContent || '').trim();
+    if (v) out.push(v);
+  });
+  return out;
+}"""
+
+CELLS_TA_JS = r"""() => {
+  const out = [];
+  document.querySelectorAll('textarea.inputarea').forEach(ta => {
+    let root = ta;
+    while (root && root.classList && !root.classList.contains('cell')) root = root.parentElement;
+    if (root && root.classList.contains('markdown')) return;
+    const v = (ta.value || ta.textContent || '').trim();
+    if (v) out.push(v);
+  });
+  return out;
+}"""
+
 RUN_ALL_JS = r"""() => {
-  const labels = ['\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0432\u0441\u0435', 'Run all'];
+  const labels = ['\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0432\u0441\u0435', 'Run all', '\u0412\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0432\u0441\u0451', 'Run all cells'];
   const norm = s => (s || '').replace(/\s+/g, ' ').trim();
   let hit = null;
   const walk = root => {
@@ -443,6 +511,17 @@ def frames_text(page):
         if t:
             parts.append(t)
     return "\n".join(parts)
+
+
+def editor_text(page):
+    vals = frame_call(page, CELLS_JS) or []
+    if vals:
+        return "\n".join(vals)
+    return "\n".join(frame_call(page, CELLS_TA_JS) or [])
+
+
+def run_started(page):
+    return running(page) or bool(editor_text(page).strip()) or "setup done" in frames_text(page)
 
 
 def wait_ready(page, timeout):
@@ -567,16 +646,38 @@ def _free_port():
     return port
 
 
+def _pids(profile):
+    path = str(profile).replace("'", "''")
+    script = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+              "Where-Object { $_.CommandLine -and $_.CommandLine.Contains('" + path + "') } | "
+              "ForEach-Object { $_.ProcessId }")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                             capture_output=True, text=True, check=False).stdout
+    except Exception:
+        return []
+    return [int(x) for x in out.split() if x.strip().isdigit()]
+
+
+def kill_profile(profile):
+    for pid in _pids(profile):
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                       capture_output=True, check=False)
+
+
 def _spawn(profile, headed, port):
     exe = _find_chrome()
     if not exe:
-        return None
+        return None, None
+    kill_profile(profile)
     cmd = [
         exe,
         "--user-data-dir=" + str(profile),
         "--remote-debugging-port=" + str(port),
         "--no-first-run",
         "--no-default-browser-check",
+        "--disable-session-crashed-bubble",
+        "--hide-crash-restore-bubble",
         "--disable-blink-features=AutomationControlled",
         "--disable-features=BlockThirdPartyCookies,TrackingProtection3pcd,ThirdPartyStoragePartitioning",
         "--window-size=1440,960",
@@ -590,25 +691,50 @@ def _spawn(profile, headed, port):
     for _ in range(60):
         try:
             urllib.request.urlopen(endpoint + "/json/version", timeout=2).read()
-            return endpoint
+            return endpoint, proc
         except Exception:
             if proc.poll() is not None:
-                return None
+                return None, None
             time.sleep(1)
-    return None
+    return None, proc
 
 
 def connect(p, profile, headed):
-    endpoint = _spawn(profile, headed, _free_port())
+    endpoint, proc = _spawn(profile, headed, _free_port())
     if endpoint:
         browser = p.chromium.connect_over_cdp(endpoint)
-        return browser.contexts[0] if browser.contexts else browser.new_context()
+        return browser.contexts[0] if browser.contexts else browser.new_context(), proc
+    if proc:
+        proc.terminate()
     return p.chromium.launch_persistent_context(
         user_data_dir=str(profile),
         headless=not headed,
         viewport={"width": 1440, "height": 960},
         args=CHROME_ARGS,
-    )
+    ), None
+
+
+def teardown(ctx, proc, profile=None):
+    try:
+        ctx.close()
+    except Exception:
+        pass
+    if profile:
+        kill_profile(profile)
+    if proc:
+        try:
+            proc.terminate()
+            proc.wait(timeout=10)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, check=False)
+        except Exception:
+            pass
 
 
 def find_text(page, labels):
@@ -629,15 +755,23 @@ def running(page):
         return False
 
 
-def start_run(page):
+def start_run(page, first_cell=""):
     if run_all(page):
         page.wait_for_timeout(3000)
-        if accept_run(page, wait=10.0) or running(page):
+        if accept_run(page, wait=10.0):
+            log("run all clicked")
+            return True
+        if not first_cell and running(page):
             log("run all clicked")
             return True
     page.keyboard.press("Control+F9")
     page.wait_for_timeout(2500)
-    if accept_run(page, wait=8.0) or running(page):
+    if accept_run(page, wait=8.0):
+        return True
+    text = editor_text(page)
+    if first_cell and first_cell.strip() and first_cell.strip()[:60] not in text and not running(page):
+        return False
+    if running(page):
         return True
     menu = find_text(page, ["Runtime", "Среда выполнения"])
     if menu:
@@ -647,9 +781,34 @@ def start_run(page):
         if item:
             page.mouse.click(item["x"], item["y"])
             page.wait_for_timeout(2500)
-            if accept_run(page, wait=15.0) or running(page):
+            if accept_run(page, wait=15.0):
                 return True
-    return accept_run(page, wait=10.0) or running(page)
+    if accept_run(page, wait=10.0):
+        return True
+    return run_started(page)
+
+
+def make_data_bundle(data_dir, out_path):
+    files = ["train.bin", "val.bin", "tokenizer.json", "meta.json", "sft.jsonl"]
+    with out_path.open("w", encoding="utf-8") as f:
+        for name in files:
+            p = Path(data_dir) / name
+            if not p.exists():
+                log(f"bundle: missing {name}")
+                continue
+            b = base64.b64encode(p.read_bytes()).decode()
+            f.write(f"@@FILE {name} {len(b)}\n")
+            for i in range(0, len(b), 76):
+                f.write(b[i:i + 76] + "\n")
+            f.write("@@END " + name + "\n")
+    log(f"bundle {out_path} {out_path.stat().st_size} bytes")
+
+
+def gist_parts(gist_url):
+    m = re.search(r"gist\.github\.com/([^/]+)/([0-9a-f]+)", gist_url)
+    if not m:
+        raise RuntimeError(f"cannot parse gist url: {gist_url}")
+    return m.group(1), m.group(2)
 
 
 def main():
@@ -659,11 +818,12 @@ def main():
     ap.add_argument("--profile", default=str(Path(os.environ.get("LOCALAPPDATA", ".")) / "DanyAI" / "colab-profile"))
     ap.add_argument("--out", default="runs/mini")
     ap.add_argument("--headed", action="store_true")
-    ap.add_argument("--steps", type=int, default=20000)
+    ap.add_argument("--steps", type=int, default=2000)
     ap.add_argument("--vocab", type=int, default=8192)
     ap.add_argument("--block", type=int, default=256)
-    ap.add_argument("--batch", type=int, default=48)
-    ap.add_argument("--warmup", type=int, default=500)
+    ap.add_argument("--batch", type=int, default=32)
+    ap.add_argument("--warmup", type=int, default=200)
+    ap.add_argument("--data", default="data")
     ap.add_argument("--timeout", type=int, default=21600)
     ap.add_argument("--ready-wait", type=int, default=180)
     ap.add_argument("--keep-open", action="store_true")
@@ -677,7 +837,7 @@ def main():
     if args.login:
         log("opening profile for google sign-in")
         with sync_playwright() as p:
-            ctx = connect(p, args.profile, True)
+            ctx, proc = connect(p, args.profile, True)
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             page.goto("https://accounts.google.com", wait_until="domcontentloaded", timeout=60000)
             log("sign in then close browser")
@@ -686,23 +846,34 @@ def main():
                     page.wait_for_timeout(5000)
             except Exception:
                 pass
-            ctx.close()
+            teardown(ctx, proc, args.profile)
         return 0
 
 
     out = Path(args.out)
     nb_path = Path(args.notebook)
+    out.mkdir(parents=True, exist_ok=True)
 
     if args.url:
         url = args.url
     else:
+        bundle_path = out / "danyai_data.bundle"
+        make_data_bundle(args.data, bundle_path)
+        gist_data = publish(bundle_path, "danyai data bundle")
+        user, gid = gist_parts(gist_data)
+        data_raw = f"https://gist.githubusercontent.com/{user}/{gid}/raw/danyai_data.bundle"
+        log(f"data raw {data_raw}")
+
+        bundle_cell = BUNDLE.replace("__DATA_RAW__", data_raw)
         train = (TRAIN
-                 .replace("__VOCAB__", str(args.vocab))
                  .replace("__BLOCK__", str(args.block))
                  .replace("__BATCH__", str(args.batch))
                  .replace("__STEPS__", str(args.steps))
                  .replace("__WARMUP__", str(args.warmup)))
-        nb = build(train, not args.no_git, not args.no_artifacts)
+        cells = [SETUP, bundle_cell, train, SFT]
+        if not args.no_artifacts:
+            cells.append(PACK)
+        nb = notebook(cells)
         nb_path.parent.mkdir(parents=True, exist_ok=True)
         nb_path.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
         gist = publish(nb_path, "danyai colab run")
@@ -713,7 +884,7 @@ def main():
 
     with sync_playwright() as p:
         prepare_profile(args.profile)
-        ctx = connect(p, args.profile, args.headed)
+        ctx, proc = connect(p, args.profile, args.headed)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         opened = False
         for attempt in range(4):
@@ -726,7 +897,7 @@ def main():
                 page.wait_for_timeout(15000)
         if not opened:
             log("error: cannot open notebook")
-            ctx.close()
+            teardown(ctx, proc, args.profile)
             return 1
         if not wait_ready(page, args.ready_wait * 1000):
             log("error: notebook did not open")
@@ -740,13 +911,13 @@ def main():
                         page.wait_for_timeout(5000)
                 except KeyboardInterrupt:
                     pass
-            ctx.close()
+            teardown(ctx, proc, args.profile)
             return 1
         log("notebook ready")
-        if signed_out(page):
+        if signed_out(page) or login_dialog(page):
             log("error: google sign-in required in profile " + args.profile)
             if not args.headed:
-                ctx.close()
+                teardown(ctx, proc, args.profile)
                 return 2
             log("browser open, sign in then press Ctrl+C")
             try:
@@ -754,7 +925,7 @@ def main():
                     page.wait_for_timeout(5000)
             except KeyboardInterrupt:
                 pass
-            ctx.close()
+            teardown(ctx, proc, args.profile)
             return 2
         page.wait_for_timeout(1500)
         try:
@@ -764,12 +935,15 @@ def main():
             pass
         page.wait_for_timeout(500)
         ensure_connected(page, 30)
+        first_cell = editor_text(page).splitlines()[:1]
+        first_cell = first_cell[0].strip() if first_cell else ""
         confirmed = False
         for attempt in range(3):
-            if start_run(page):
+            if start_run(page, first_cell):
                 confirmed = True
                 break
             log("retry run all %d" % (attempt + 1))
+            page.wait_for_timeout(5000)
         log("run all started" if confirmed else "warn: run all not confirmed")
         if not confirmed:
             try:
@@ -794,8 +968,8 @@ def main():
                     page.wait_for_timeout(5000)
             except KeyboardInterrupt:
                 pass
-        ctx.close()
-    return 0
+        teardown(ctx, proc, args.profile)
+    return 0 if ok else 3
 
 
 if __name__ == "__main__":

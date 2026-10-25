@@ -2,7 +2,7 @@ import argparse
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from .sample import load_ckpt, generate
+from .infer import Engine
 from .tokenizer import BPETokenizer
 
 STATE = {}
@@ -20,6 +20,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _sse(self, obj):
+        chunk = "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+        self.wfile.write(chunk.encode("utf-8"))
+        self.wfile.flush()
+
     def do_GET(self):
         if self.path == "/health":
             self._send(200, {"status": "ok", "model": STATE["cfg"].get("name", "DanyAI")})
@@ -28,32 +33,86 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": "not found"})
 
+    def _parse(self):
+        n = int(self.headers.get("Content-Length", 0))
+        req = json.loads(self.rfile.read(n) or b"{}")
+        prompt = req.get("prompt", "")
+        if isinstance(prompt, list):
+            prompt = prompt[0] if prompt else ""
+        if not prompt and isinstance(req.get("messages"), list):
+            parts = []
+            for m in req["messages"]:
+                parts.append(str(m.get("role", "user")) + ": " + str(m.get("content", "")))
+            prompt = "\n".join(parts) + "\nassistant:"
+        return req, prompt
+
+    @staticmethod
+    def _kw(req):
+        return {
+            "tokens": int(req.get("max_tokens", req.get("tokens", 100))),
+            "temp": float(req.get("temperature", req.get("temp", 0.8))),
+            "top_k": int(req.get("top_k", 40)),
+            "top_p": float(req.get("top_p", 0.95)),
+            "repetition": float(req.get("repetition", 1.05)),
+            "presence": float(req.get("presence", 0.0)),
+            "frequency": float(req.get("frequency", 0.0)),
+            "seed": int(req.get("seed", 0)),
+        }
+
     def do_POST(self):
-        if self.path not in ("/generate", "/v1/completions"):
+        if self.path not in ("/generate", "/v1/completions", "/v1/chat/completions"):
             self._send(404, {"error": "not found"})
             return
         try:
-            n = int(self.headers.get("Content-Length", 0))
-            req = json.loads(self.rfile.read(n) or b"{}")
-            prompt = req.get("prompt", "")
-            if isinstance(prompt, list):
-                prompt = prompt[0] if prompt else ""
+            req, prompt = self._parse()
+            kw = self._kw(req)
+            if req.get("stream"):
+                self._stream(prompt, kw)
+                return
+            out = []
             with LOCK:
-                text = generate(
-                    STATE["model"], STATE["tok"], prompt,
-                    int(req.get("max_tokens", req.get("tokens", 100))),
-                    float(req.get("temperature", req.get("temp", 0.8))),
-                    int(req.get("top_k", 40)),
-                    int(req.get("seed", 0)),
-                )
-            if self.path == "/v1/completions":
-                self._send(200, {"object": "text_completion",
-                                 "choices": [{"text": text, "index": 0, "finish_reason": "length"}],
-                                 "model": STATE["cfg"].get("name", "DanyAI")})
-            else:
-                self._send(200, {"text": text})
+                STATE["engine"].generate(STATE["tok"], prompt,
+                                         on_token=lambda d, _n: out.append(d), **kw)
+            self._reply("".join(out))
         except Exception as e:
             self._send(400, {"error": str(e)})
+
+    def _reply(self, text):
+        name = STATE["cfg"].get("name", "DanyAI")
+        if self.path == "/v1/chat/completions":
+            self._send(200, {"object": "chat.completion", "model": name,
+                             "choices": [{"index": 0,
+                                          "message": {"role": "assistant", "content": text},
+                                          "finish_reason": "length"}]})
+        elif self.path == "/v1/completions":
+            self._send(200, {"object": "text_completion",
+                             "choices": [{"text": text, "index": 0, "finish_reason": "length"}],
+                             "model": name})
+        else:
+            self._send(200, {"text": text})
+
+    def _stream(self, prompt, kw):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        def emit(delta, _n):
+            try:
+                self._sse({"choices": [{"delta": {"content": delta}, "index": 0}]})
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        try:
+            with LOCK:
+                STATE["engine"].generate(STATE["tok"], prompt, on_token=emit, **kw)
+            self._sse({"choices": [{"delta": {}, "finish_reason": "length", "index": 0}]})
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        self.close_connection = True
 
     def log_message(self, fmt, *args):
         pass
@@ -67,7 +126,7 @@ def main():
     ap.add_argument("--port", type=int, default=8080)
     args = ap.parse_args()
 
-    STATE["model"], STATE["cfg"] = load_ckpt(args.ckpt)
+    STATE["engine"], STATE["cfg"] = Engine.from_file(args.ckpt)
     STATE["tok"] = BPETokenizer.load(args.tok)
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"http://{args.host}:{args.port}/generate", flush=True)

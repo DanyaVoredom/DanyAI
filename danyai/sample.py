@@ -1,37 +1,19 @@
 import argparse
 import json
 import numpy as np
-from .model import GPT
+from .infer import Engine, apply_penalties, sample_token
 from .tokenizer import BPETokenizer
 
 
 def load_ckpt(path):
-    z = np.load(path, allow_pickle=False)
-    cfg = json.loads(str(z["cfg"]))
-    model = GPT(cfg)
-    model.load_state({k: z[k] for k in z.files if k != "cfg"})
-    return model, cfg
+    engine, cfg = Engine.from_file(path)
+    return engine, cfg
 
 
-def generate(model, tok, prompt, tokens=200, temp=0.8, top_k=40, seed=0):
-    rng = np.random.default_rng(seed)
-    ids = tok.encode(prompt) or [10]
-    block = model.cfg["block_size"]
-    for _ in range(tokens):
-        ctx = np.array([ids[-block:]], dtype=np.int64)
-        logits = model.forward(ctx).data[0, -1].astype(np.float64)
-        if temp <= 0:
-            nxt = int(logits.argmax())
-        else:
-            logits /= temp
-            if top_k and top_k < logits.size:
-                thr = np.sort(logits)[-top_k]
-                logits[logits < thr] = -np.inf
-            p = np.exp(logits - logits.max())
-            p /= p.sum()
-            nxt = int(rng.choice(len(p), p=p))
-        ids.append(nxt)
-    return tok.decode(ids)
+def generate(engine, tok, prompt, tokens=200, temp=0.8, top_k=40, top_p=1.0,
+             repetition=1.0, presence=0.0, frequency=0.0, seed=0):
+    return engine.generate(tok, prompt, tokens, temp, top_k, top_p,
+                           repetition, presence, frequency, seed)
 
 
 def main():
@@ -42,12 +24,18 @@ def main():
     ap.add_argument("--tokens", type=int, default=200)
     ap.add_argument("--temp", type=float, default=0.8)
     ap.add_argument("--top-k", type=int, default=40)
+    ap.add_argument("--top-p", type=float, default=1.0)
+    ap.add_argument("--repetition", type=float, default=1.0)
+    ap.add_argument("--presence", type=float, default=0.0)
+    ap.add_argument("--frequency", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    model, _ = load_ckpt(args.ckpt)
+    engine, _ = load_ckpt(args.ckpt)
     tok = BPETokenizer.load(args.tok)
-    print(generate(model, tok, args.prompt, args.tokens, args.temp, args.top_k, args.seed))
+    print(engine.generate(tok, args.prompt, args.tokens, args.temp, args.top_k,
+                          args.top_p, args.repetition, args.presence,
+                          args.frequency, args.seed))
 
 
 if __name__ == "__main__":

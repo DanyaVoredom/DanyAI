@@ -131,6 +131,90 @@ def gelu(t):
     return out
 
 
+def silu(t):
+    x = t.data
+    s = 1.0 / (1.0 + np.exp(-x))
+    out = T(x * s, t.requires_grad, (t,))
+
+    def bw():
+        d = s + x * s * (1.0 - s)
+        d *= out.grad
+        t.grad = _acc(t.grad, d)
+
+    out._backward = bw
+    return out
+
+
+def split_last(t, k):
+    a = T(t.data[..., :k], t.requires_grad, (t,))
+    b = T(t.data[..., k:], t.requires_grad, (t,))
+
+    def bw_a():
+        g = np.zeros_like(t.data)
+        g[..., :k] = a.grad
+        t.grad = _acc(t.grad, g)
+
+    def bw_b():
+        g = np.zeros_like(t.data)
+        g[..., k:] = b.grad
+        t.grad = _acc(t.grad, g)
+
+    a._backward = bw_a
+    b._backward = bw_b
+    return a, b
+
+
+def concat_last(a, b):
+    out = T(np.concatenate([a.data, b.data], axis=-1),
+            a.requires_grad or b.requires_grad, (a, b))
+    k = a.data.shape[-1]
+
+    def bw():
+        if a.requires_grad:
+            a.grad = _acc(a.grad, out.grad[..., :k])
+        if b.requires_grad:
+            b.grad = _acc(b.grad, out.grad[..., k:])
+
+    out._backward = bw
+    return out
+
+
+def repeat_heads(t, rep):
+    if rep == 1:
+        return t
+    out = T(np.repeat(t.data, rep, axis=1), t.requires_grad, (t,))
+
+    def bw():
+        g = out.grad
+        shape = g.shape
+        g = g.reshape(shape[0], shape[1] // rep, rep, shape[2], shape[3]).sum(axis=2)
+        t.grad = _acc(t.grad, g)
+
+    out._backward = bw
+    return out
+
+
+def rmsnorm(x, g, eps=1e-5):
+    xd = x.data
+    rstd = np.float32(1.0) / np.sqrt((xd * xd).mean(-1, keepdims=True) + eps)
+    xhat = xd * rstd
+    out = T(xhat * g.data, x.requires_grad or g.requires_grad, (x, g))
+    axes = tuple(range(xd.ndim - 1))
+
+    def bw():
+        d = out.grad
+        if g.requires_grad:
+            g.grad = _acc(g.grad, (d * xhat).sum(axis=axes))
+        if x.requires_grad:
+            dxhat = d * g.data
+            dxhat -= xhat * (dxhat * xhat).mean(-1, keepdims=True)
+            dxhat *= rstd
+            x.grad = _acc(x.grad, dxhat)
+
+    out._backward = bw
+    return out
+
+
 def layernorm(x, g, b, eps=1e-5):
     xd = x.data
     mu = xd.mean(-1, keepdims=True)
@@ -153,6 +237,25 @@ def layernorm(x, g, b, eps=1e-5):
             dxhat -= xhat * (dxhat * xhat).mean(-1, keepdims=True)
             dxhat *= rstd
             x.grad = _acc(x.grad, dxhat)
+
+    out._backward = bw
+    return out
+
+
+def rope(t, cos, sin):
+    x = t.data
+    half = x.shape[-1] // 2
+    x1 = x[..., :half]
+    x2 = x[..., half:]
+    out = T(np.concatenate([x1 * cos - x2 * sin, x1 * sin + x2 * cos], axis=-1),
+            t.requires_grad, (t,))
+
+    def bw():
+        g = out.grad
+        g1 = g[..., :half]
+        g2 = g[..., half:]
+        d = np.concatenate([g1 * cos + g2 * sin, -g1 * sin + g2 * cos], axis=-1)
+        t.grad = _acc(t.grad, d)
 
     out._backward = bw
     return out
@@ -194,16 +297,23 @@ def cross_entropy(logits, targets):
     p = e / e.sum(-1, keepdims=True)
     v = p.shape[-1]
     flat = p.reshape(-1, v)
-    n = targets.size
     y = targets.ravel()
-    rows = np.arange(n)
-    loss = -np.log(flat[rows, y] + 1e-9).mean()
+    rows = np.arange(y.size)
+    keep = y >= 0
+    n = int(keep.sum())
+    if n:
+        loss = -np.log(flat[rows[keep], y[keep]] + 1e-9).mean()
+    else:
+        loss = np.float32(0.0)
     out = T(loss, logits.requires_grad, (logits,))
 
     def bw():
-        d = flat
-        d[rows, y] -= 1.0
-        d *= np.float32(1.0 / n)
+        d = flat.copy()
+        if n:
+            d[rows[keep], y[keep]] -= 1.0
+            d *= np.float32(1.0 / n)
+        else:
+            d[...] = 0
         logits.grad = _acc(logits.grad, d.reshape(logits.data.shape))
 
     out._backward = bw

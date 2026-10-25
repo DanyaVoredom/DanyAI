@@ -1,7 +1,7 @@
 import argparse
 import sys
 import numpy as np
-from .sample import load_ckpt, generate
+from .infer import Engine
 from .tokenizer import BPETokenizer
 
 
@@ -11,12 +11,21 @@ def main():
     ap.add_argument("--tok", default="data/tokenizer.json")
     ap.add_argument("--temp", type=float, default=0.8)
     ap.add_argument("--top-k", type=int, default=40)
+    ap.add_argument("--top-p", type=float, default=0.95)
+    ap.add_argument("--repetition", type=float, default=1.05)
+    ap.add_argument("--presence", type=float, default=0.0)
+    ap.add_argument("--frequency", type=float, default=0.0)
     ap.add_argument("--tokens", type=int, default=200)
     args = ap.parse_args()
 
-    model, cfg = load_ckpt(args.ckpt)
+    engine, cfg = Engine.from_file(args.ckpt)
     tok = BPETokenizer.load(args.tok)
-    print(cfg.get("name", "DanyAI"), "ready. пустая строка для выхода.", flush=True)
+    print(cfg.get("name", "DanyAI"), "ready. empty line to exit.", flush=True)
+
+    def emit(delta, _n):
+        sys.stdout.write(delta)
+        sys.stdout.flush()
+
     while True:
         try:
             prompt = input("> ")
@@ -24,8 +33,11 @@ def main():
             break
         if not prompt.strip():
             break
-        print(generate(model, tok, prompt, args.tokens, args.temp, args.top_k,
-                       seed=int(np.random.randint(1 << 30))), flush=True)
+        engine.generate(tok, prompt, args.tokens, args.temp, args.top_k,
+                        args.top_p, args.repetition, args.presence,
+                        args.frequency, int(np.random.randint(1 << 30)),
+                        on_token=emit)
+        print(flush=True)
 
 
 if __name__ == "__main__":

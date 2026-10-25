@@ -69,6 +69,14 @@ def lr_at(step, steps, base, warmup):
     return base * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * p)))
 
 
+def batch_ce(model, x, y):
+    logits = model.forward(x).data.astype(np.float64)
+    logits = logits - logits.max(-1, keepdims=True)
+    lse = np.log(np.exp(logits).sum(-1))
+    rows = np.arange(y.size)
+    return float((-logits.reshape(-1, logits.shape[-1])[rows, y.ravel()] + lse.ravel()).mean())
+
+
 def save(model, cfg, path, step=0, best=float("inf")):
     np.savez(path, cfg=np.array(json.dumps(cfg)), step=np.array(step), best=np.array(best), **model.state())
 
@@ -127,12 +135,13 @@ def main():
         if step % cfg.get("eval_every", 200) == 0 or step == steps:
             xv, yv = get_batch(val, cfg["block_size"], cfg["batch_size"], rng)
             vl = float(model.loss(xv, yv).data)
+            ppl = math.exp(min(20.0, batch_ce(model, xv, yv)))
             flag = ""
             if vl < best:
                 best = vl
                 save(model, cfg, os.path.join(args.out, "best.npz"), step, best)
                 flag = " best"
-            print(f"eval step {step} val {vl:.4f}{flag}", flush=True)
+            print(f"eval step {step} val {vl:.4f} ppl {ppl:.2f}{flag}", flush=True)
         if step % cfg.get("save_every", 500) == 0 or step == steps:
             save(model, cfg, os.path.join(args.out, "ckpt.npz"), step, best)
             save(model, cfg, os.path.join(args.out, f"ckpt_{step}.npz"), step, best)

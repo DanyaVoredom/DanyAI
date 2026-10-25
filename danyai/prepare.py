@@ -1,20 +1,47 @@
 import argparse
+import html
 import json
 import os
+import re
 import sys
 import time
 import numpy as np
 from .tokenizer import BPETokenizer
 
+TAG_RE = re.compile(r"<[^>]+>")
+SCRIPT_RE = re.compile(r"<(script|style)\b.*?</\1>", re.S | re.I)
+WS_RE = re.compile(r"[ \t\r\f\v]+")
+NL_RE = re.compile(r"\n{3,}")
+
+
+def clean_text(text):
+    if "<" in text and ">" in text:
+        text = SCRIPT_RE.sub(" ", text)
+        text = TAG_RE.sub("\n", text)
+        text = html.unescape(text)
+    text = text.replace("\xa0", " ").replace("\ufeff", "")
+    text = WS_RE.sub(" ", text)
+    text = NL_RE.sub("\n\n", text)
+    return text.strip()
+
 
 def read_corpus(root):
     parts = []
+    skipped = 0
     for cur, _, files in os.walk(root):
         for fn in sorted(files):
-            if fn.lower().endswith(".txt"):
-                with open(os.path.join(cur, fn), "r", encoding="utf-8", errors="ignore") as f:
-                    parts.append(f.read())
-    return "\n".join(parts)
+            if not fn.lower().endswith(".txt") or fn.startswith("_"):
+                skipped += 1
+                continue
+            with open(os.path.join(cur, fn), "r", encoding="utf-8", errors="ignore") as f:
+                t = clean_text(f.read())
+            if t:
+                parts.append(t)
+            else:
+                skipped += 1
+    if skipped:
+        print(f"skipped {skipped} files", flush=True)
+    return "\n\n".join(parts)
 
 
 def pick_dtype(vocab):
