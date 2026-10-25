@@ -19,6 +19,19 @@ def load_jsonl(path):
     return rows
 
 
+def disable_torchao():
+    try:
+        import peft.import_utils as iu
+        iu.is_torchao_available = lambda: False
+    except Exception:
+        pass
+    try:
+        import peft.tuners.lora.torchao as lt
+        lt.is_torchao_available = lambda: False
+    except Exception:
+        pass
+
+
 def find_targets(model):
     names = [n for n, _ in model.named_modules()]
     want = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
@@ -30,27 +43,56 @@ class ChatData(Dataset):
     def __init__(self, rows, tok, max_len):
         self.items = []
         for r in rows:
-            user = str(r.get("user", ""))
-            assistant = str(r.get("assistant", ""))
-            if not user.strip() or not assistant.strip():
+            msgs = None
+            if isinstance(r.get("messages"), list) and r["messages"]:
+                msgs = []
+                for m in r["messages"]:
+                    role = str(m.get("role") or "").strip()
+                    content = str(m.get("content") or "")
+                    if role in ("system", "user", "assistant", "tool") and content.strip():
+                        msgs.append({"role": role, "content": content})
+            else:
+                user = str(r.get("user", ""))
+                assistant = str(r.get("assistant", ""))
+                if user.strip() and assistant.strip():
+                    msgs = [{"role": "user", "content": user},
+                            {"role": "assistant", "content": assistant}]
+            if not msgs or not any(m["role"] == "assistant" for m in msgs):
                 continue
-            msgs = [{"role": "user", "content": user}]
-            prompt = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
-            full_msgs = msgs + [{"role": "assistant", "content": assistant}]
-            full = tok.apply_chat_template(full_msgs, tokenize=False, add_generation_prompt=False)
-            p_ids = tok(prompt, add_special_tokens=False)["input_ids"]
-            f_ids = tok(full, add_special_tokens=False)["input_ids"]
-            if len(f_ids) > max_len:
-                f_ids = f_ids[:max_len]
-            if len(f_ids) < 4:
+            item = self._encode(msgs, tok, max_len)
+            if item:
+                self.items.append(item)
+
+    @staticmethod
+    def _encode(msgs, tok, max_len):
+        ids = []
+        labels = []
+        prev = 0
+        for i, m in enumerate(msgs):
+            try:
+                text = tok.apply_chat_template(msgs[:i + 1], tokenize=False, add_generation_prompt=False)
+            except Exception:
+                return None
+            cur = tok(text, add_special_tokens=False)["input_ids"]
+            if cur[:prev] != ids:
+                return None
+            chunk = cur[prev:]
+            if not chunk:
                 continue
-            cut = min(len(p_ids), len(f_ids) - 1)
-            labels = list(f_ids)
-            for i in range(cut):
-                labels[i] = -100
-            if all(x == -100 for x in labels):
-                continue
-            self.items.append((f_ids, labels))
+            ids.extend(chunk)
+            if m["role"] == "assistant":
+                labels.extend(chunk)
+            else:
+                labels.extend([-100] * len(chunk))
+            prev = len(cur)
+        if not ids or len(ids) > max_len:
+            ids = ids[:max_len]
+            labels = labels[:max_len]
+        if not any(x != -100 for x in labels):
+            return None
+        if len(ids) < 4:
+            return None
+        return ids, labels
 
     def __len__(self):
         return len(self.items)
@@ -150,6 +192,7 @@ def main():
     lcfg = LoraConfig(r=args.lora_r, lora_alpha=args.lora_alpha,
                       lora_dropout=args.lora_dropout, bias="none",
                       task_type="CAUSAL_LM", target_modules=targets)
+    disable_torchao()
     model = get_peft_model(model, lcfg)
     if args.grad_ckpt and cuda:
         try:
@@ -159,7 +202,11 @@ def main():
             print("grad ckpt disabled:", e, flush=True)
     model.print_trainable_parameters()
 
-    rows = load_jsonl(args.data)
+    rows = []
+    for path in args.data.split(","):
+        part = load_jsonl(path.strip())
+        print(f"data {path.strip()} rows {len(part)}", flush=True)
+        rows.extend(part)
     random.Random(args.seed).shuffle(rows)
     if args.limit > 0:
         rows = rows[:args.limit]

@@ -39,8 +39,16 @@ def build_messages(req):
     if isinstance(msgs, list) and msgs:
         out = []
         for m in msgs:
-            out.append({"role": str(m.get("role", "user")),
-                        "content": str(m.get("content", ""))})
+            role = str(m.get("role", "user"))
+            content = m.get("content")
+            if isinstance(content, list):
+                content = "".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
+            item = {"role": role, "content": str(content or "")}
+            if m.get("tool_calls"):
+                item["tool_calls"] = m["tool_calls"]
+            if m.get("name"):
+                item["name"] = str(m["name"])
+            out.append(item)
         return out
     prompt = req.get("prompt", "")
     if isinstance(prompt, list):
@@ -48,8 +56,33 @@ def build_messages(req):
     return [{"role": "user", "content": str(prompt)}]
 
 
-def generate(tok, model, messages, params, streamer=None):
-    text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+def parse_tool_calls(text):
+    import re
+    calls = []
+    for m in re.finditer(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text or "", re.S):
+        raw = m.group(1)
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            continue
+        name = obj.get("name") or (obj.get("function") or {}).get("name")
+        args = obj.get("arguments")
+        if args is None:
+            args = (obj.get("function") or {}).get("arguments", {})
+        if not name:
+            continue
+        if not isinstance(args, str):
+            args = json.dumps(args, ensure_ascii=False)
+        calls.append({"id": "call_%d" % (len(calls) + 1), "type": "function",
+                      "function": {"name": name, "arguments": args}})
+    return calls
+
+
+def generate(tok, model, messages, params, streamer=None, tools=None):
+    kwargs = {}
+    if tools:
+        kwargs["tools"] = tools
+    text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
     ids = tok(text, return_tensors="pt", add_special_tokens=False).input_ids.to(model.device)
     kw = {
         "max_new_tokens": int(params["max_tokens"]),
@@ -117,9 +150,15 @@ class Handler(BaseHTTPRequestHandler):
     def _reply(self, text):
         name = INIT["name"]
         if self.path == "/v1/chat/completions":
+            calls = parse_tool_calls(text)
+            if calls:
+                message = {"role": "assistant", "content": "", "tool_calls": calls}
+                finish = "tool_calls"
+            else:
+                message = {"role": "assistant", "content": text}
+                finish = "stop"
             self._send(200, {"object": "chat.completion", "model": name,
-                             "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
-                                          "finish_reason": "length"}]})
+                             "choices": [{"index": 0, "message": message, "finish_reason": finish}]})
         elif self.path == "/v1/completions":
             self._send(200, {"object": "text_completion", "model": name,
                              "choices": [{"text": text, "index": 0, "finish_reason": "length"}]})
@@ -139,20 +178,21 @@ class Handler(BaseHTTPRequestHandler):
             params = self._params(req)
             messages = build_messages(req)
             if req.get("stream"):
-                self._stream(messages, params)
+                self._stream(messages, params, tools=req.get("tools") or None)
                 return
             with LOCK:
-                text = generate(INIT["tok"], INIT["model"], messages, params)
+                text = generate(INIT["tok"], INIT["model"], messages, params,
+                                tools=req.get("tools") or None)
             self._reply(text)
         except Exception as e:
             self._send(400, {"error": str(e)})
 
-    def _stream(self, messages, params):
+    def _stream(self, messages, params, tools=None):
         name = INIT["name"]
         chat = self.path == "/v1/chat/completions"
         streamer = TextIteratorStreamer(INIT["tok"], skip_prompt=True, skip_special_tokens=True)
         with LOCK:
-            generate(INIT["tok"], INIT["model"], messages, params, streamer=streamer)
+            generate(INIT["tok"], INIT["model"], messages, params, streamer=streamer, tools=tools)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -177,6 +217,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+        self.close_connection = True
 
 
 def main():
