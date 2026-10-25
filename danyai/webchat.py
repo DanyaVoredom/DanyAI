@@ -17,7 +17,7 @@ button{margin-top:8px;padding:8px 16px;border-radius:6px;border:1px solid #444;b
 <div id="log"></div>
 <textarea id="prompt" rows="3" placeholder="сообщение"></textarea>
 <div class="row">
-<input id="temp" value="0.8"><input id="top_p" value="0.95"><input id="tokens" value="200">
+<input id="temp" value="0.5"><input id="top_p" value="0.9"><input id="tokens" value="96">
 </div>
 <button onclick="go()">send</button>
 <button onclick="reset()">reset</button>
@@ -28,7 +28,7 @@ function render(){
   log.innerHTML='';
   for(const t of turns){
     const d=document.createElement('div');
-    d.textContent=(t.role==='user'?'you: ':'ai: ')+t.content;
+    d.textContent=(t.role==='user'?'you: ':'ai: ')+(t.content||'(пусто)');
     log.appendChild(d);
   }
   log.scrollTop=log.scrollHeight;
@@ -48,7 +48,7 @@ async function go(){
   const body={prompt:prompt,
     temperature:parseFloat(document.getElementById('temp').value),
     top_p:parseFloat(document.getElementById('top_p').value),
-    max_tokens:parseInt(document.getElementById('tokens').value),stream:true};
+    max_tokens:parseInt(document.getElementById('tokens').value),repetition:1.15,stream:true};
   const r=await fetch('/v1/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(!r.ok){turns.push({role:'ai',content:'error: '+await r.text()});render();return;}
   turns.push({role:'ai',content:''});
