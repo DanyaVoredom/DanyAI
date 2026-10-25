@@ -111,8 +111,17 @@ def main():
             print(f"step {step} loss {to_scalar(loss.data):.4f} lr {lr:.2e} gn {gn:.2f} "
                   f"{time.time() - t0:.0f}s", flush=True)
         if step % max(1, args.steps // 5) == 0 or step == args.steps:
-            xv, yv = pad(val)
-            vl = to_scalar(model.loss(xv, yv).data)
+            eb = max(1, min(args.batch, 8))
+            tot = 0.0
+            cnt = 0
+            for i in range(0, len(val), eb):
+                xv, yv = pad(val[i:i + eb])
+                n = int((yv >= 0).sum())
+                if n == 0:
+                    continue
+                tot += to_scalar(model.loss(xv, yv).data) * n
+                cnt += n
+            vl = tot / cnt if cnt else float("inf")
             flag = ""
             if vl < best:
                 best = vl
