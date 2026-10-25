@@ -30,6 +30,7 @@
 - tools/export_onnx.py - экспорт в ONNX
 - tools/quantize.py - int8-квантование чекпоинта
 - tools/finetune_lora.py - LoRA/QLoRA для Qwen/Gemma, чат и tool calling
+- tools/check_adapter.py - проверка структуры LoRA-адаптера
 - tools/fetch_instruct.py, tools/fetch_tools.py - instruct и tool-calling данные
 - danyai/hf_server.py - OpenAI API поверх transformers и LoRA, SSE и tools
 - tests/gradcheck.py - численная проверка градиентов
