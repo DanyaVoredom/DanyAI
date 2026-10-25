@@ -52,10 +52,11 @@ TRAIN = """import json
 cfg = json.load(open("configs/modern.json"))
 cfg.update(block_size=__BLOCK__, batch_size=__BATCH__, steps=__STEPS__, lr=0.002, warmup=__WARMUP__)
 cfg["name"] = "DanyAI-Modern-Colab"
+cfg["log_every"] = 1
 json.dump(cfg, open("configs/colab.json", "w"), indent=2)
-print(cfg)
+print(cfg, flush=True)
 !python -m danyai.train --config configs/colab.json --data data --out runs/colab
-!python -m danyai.sample --ckpt runs/colab/best.npz --tok data/tokenizer.json --prompt "Once upon a time" --tokens 200 --temp 0.8
+!python -m danyai.sample --ckpt runs/colab/best.npz --tok data/tokenizer.json --prompt "Once upon a time" --tokens 120 --temp 0.8
 print("train done")"""
 
 SFT = """!python -m danyai.sft --ckpt runs/colab/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out runs/sft --steps 600 --batch 4 --lr 2e-4
