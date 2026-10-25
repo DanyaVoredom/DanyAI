@@ -645,7 +645,9 @@ def extract(text, out):
         if len(b64) < size:
             log(f"artifact {name}: truncated {len(b64)}/{size}")
             continue
-        dest = out / Path(name).name
+        parts = Path(name).parts
+        rel = Path(parts[-2]) / parts[-1] if len(parts) >= 2 else Path(parts[-1])
+        dest = out / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(base64.b64decode(b64[:size]))
         saved.append((str(dest), len(b64) * 3 // 4))
