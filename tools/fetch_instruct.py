@@ -2,32 +2,34 @@ import argparse
 import json
 import os
 import time
-import urllib.error
+import subprocess
 import urllib.parse
-import urllib.request
 
 ENDPOINT = "https://datasets-server.huggingface.co/rows"
 
 
-def fetch_rows(dataset, config, split, offset, length=100, tries=6):
+def fetch_rows(dataset, config, split, offset, length=100, tries=8):
     url = (ENDPOINT + "?dataset=" + urllib.parse.quote(dataset, safe="")
            + "&config=" + urllib.parse.quote(config, safe="")
            + "&split=" + urllib.parse.quote(split, safe="")
            + f"&offset={offset}&length={length}")
     delay = 2.0
     for attempt in range(tries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "danyai"})
-            with urllib.request.urlopen(req, timeout=45) as r:
-                return json.loads(r.read())
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
-            code = getattr(e, "code", None)
-            if code not in (429, 500, 502, 503, None):
-                raise
-            if attempt == tries - 1:
-                raise
-            time.sleep(delay)
-            delay = min(delay * 2, 30.0)
+        r = subprocess.run(
+            ["curl.exe", "-sS", "-L", "--max-time", "90",
+             "--retry", "3", "--retry-delay", "2", "--retry-all-errors",
+             "-A", "danyai", url],
+            capture_output=True, text=True, errors="replace",
+        )
+        if r.returncode == 0 and r.stdout.strip().startswith("{"):
+            try:
+                return json.loads(r.stdout)
+            except json.JSONDecodeError:
+                pass
+        if attempt == tries - 1:
+            raise RuntimeError(f"fetch failed {dataset} offset {offset}: {r.returncode} {r.stderr[:200]}")
+        time.sleep(delay)
+        delay = min(delay * 2, 30.0)
     return {"rows": []}
 
 
@@ -53,6 +55,8 @@ def iter_pairs(dataset, config, split, limit, mapper):
             if produced >= limit:
                 break
         offset += len(rows)
+        if offset % 2000 == 0:
+            print(f"{dataset} {offset} rows", flush=True)
         time.sleep(0.4)
 
 

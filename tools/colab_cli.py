@@ -86,6 +86,22 @@ SFT = """!DANYAI_GPU=1 python -m danyai.sft --ckpt __RUNS__/best.npz --data data
 !DANYAI_GPU=1 python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Write a short story about a cat.<assistant|>" --tokens 120 --temp 0.7
 print("sft done")"""
 
+TRAIN_TORCH = """import json, os
+import torch
+print("torch", torch.__version__, "cuda", torch.cuda.is_available())
+cfg = json.load(open("__CONFIG__"))
+cfg.update(block_size=__BLOCK__, batch_size=__BATCH__, steps=__STEPS__, warmup=__WARMUP__)
+cfg["log_every"] = 10
+json.dump(cfg, open("configs/colab.json", "w"), indent=2)
+print(cfg, flush=True)
+!python -m danyai.torch_train --config configs/colab.json --data data --out __RUNS__ $( [ -f __RUNS__/ckpt.npz ] && echo --resume __RUNS__/ckpt.npz )
+!python -m danyai.sample --ckpt __RUNS__/best.npz --tok data/tokenizer.json --prompt "Once upon a time" --tokens 120 --temp 0.8
+print("train done")"""
+
+SFT_TORCH = """!python -m danyai.torch_sft --ckpt __RUNS__/best.npz --data data/sft.jsonl --tok data/tokenizer.json --out __RUNS__/sft --steps 1500 --batch 8 --lr 1e-4 --block 256
+!python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Придумай короткую историю про кота.<assistant|>" --tokens 120 --temp 0.7
+print("sft done")"""
+
 PACK = """import base64, pathlib
 for name in ["data/tokenizer.json", "data/meta.json", "configs/colab.json"]:
     p = pathlib.Path(name)
@@ -953,7 +969,7 @@ def upload_data_release(tag, data_dir, names):
     if not paths:
         raise RuntimeError("no data files to upload")
     subprocess.run(["gh", "release", "create", tag, "--title", tag,
-                    "--notes", "danyai corpus bundle"], capture_output=True, check=False)
+                    "--notes", "danyai corpus bundle", "--latest=false"], capture_output=True, check=False)
     r = subprocess.run(["gh", "release", "upload", tag] + paths + ["--clobber"],
                        capture_output=True, text=True)
     if r.returncode != 0:
@@ -977,6 +993,7 @@ def main():
     ap.add_argument("--config", default="configs/modern.json")
     ap.add_argument("--runs", default="/content/danyai_runs")
     ap.add_argument("--data-release", default="")
+    ap.add_argument("--trainer", default="autograd", choices=["autograd", "torch"])
     ap.add_argument("--timeout", type=int, default=21600)
     ap.add_argument("--connect-wait", type=int, default=5400)
     ap.add_argument("--ready-wait", type=int, default=180)
@@ -1026,14 +1043,16 @@ def main():
             data_raw = f"https://gist.githubusercontent.com/{user}/{gid}/raw/danyai_data.bundle"
             log(f"data raw {data_raw}")
             bundle_cell = BUNDLE.replace("__DATA_RAW__", data_raw)
-        train = (TRAIN
+        tpl = TRAIN_TORCH if args.trainer == "torch" else TRAIN
+        sft_tpl = SFT_TORCH if args.trainer == "torch" else SFT
+        train = (tpl
                  .replace("__CONFIG__", args.config)
                  .replace("__RUNS__", args.runs)
                  .replace("__BLOCK__", str(args.block))
                  .replace("__BATCH__", str(args.batch))
                  .replace("__STEPS__", str(args.steps))
                  .replace("__WARMUP__", str(args.warmup)))
-        sft_cell = SFT.replace("__RUNS__", args.runs)
+        sft_cell = sft_tpl.replace("__RUNS__", args.runs)
         cells = [SETUP, bundle_cell, train, sft_cell]
         if not args.no_artifacts:
             cells.append(PACK.replace("__RUNS__", args.runs))
