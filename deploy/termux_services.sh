@@ -28,9 +28,6 @@ EOF
   chmod +x "$dir/log/run"
 }
 
-sshd_body='cd "$HOME" || exit 1
-exec sshd -D -e 2>&1'
-
 server_body='sleep 5
 cd "$HOME/DanyAI" || exit 1
 timeout 5 termux-wake-lock 2>/dev/null || true
@@ -56,7 +53,6 @@ if [ -f runs/phone/ckpt.npz ]; then
 fi
 exec python -m danyai.train --config configs/phone.json --data data_phone --out runs/phone --steps $STEPS --workers $WORKERS"
 
-write_service danyai-sshd "$sshd_body"
 write_service danyai-server "$server_body"
 write_service danyai-webchat "$webchat_body"
 write_service danyai-train "$train_body"
@@ -69,12 +65,12 @@ pgrep -f "runsvdir $SVDIR" >/dev/null || exec runsvdir "$SVDIR"
 EOF
 chmod +x "$HOME/.termux/boot/danyai"
 
-for name in danyai-sshd danyai-server danyai-webchat danyai-train; do
+for name in danyai-server danyai-webchat danyai-train; do
   sv up "$name" 2>/dev/null || true
 done
 
 sleep 8
-for name in danyai-sshd danyai-server danyai-webchat danyai-train; do
+for name in danyai-server danyai-webchat danyai-train; do
   printf "%s: " "$name"
   sv status "$name" 2>/dev/null || echo "нет статуса"
 done
