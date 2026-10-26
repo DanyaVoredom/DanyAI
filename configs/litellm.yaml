@@ -1,0 +1,25 @@
+model_list:
+  - model_name: danyai-qwen
+    litellm_params:
+      model: openai/qwen3.5-2b-abliterated
+      api_base: http://127.0.0.1:8081/v1
+      api_key: none
+  - model_name: danyai-nano
+    litellm_params:
+      model: openai/danyai-phone
+      api_base: http://127.0.0.1:8080/v1
+      api_key: none
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 300
+
+router_settings:
+  routing_strategy: simple-shuffle
+  enable_pre_call_checks: true
+
+general_settings:
+  master_key: sk-danyai-local
+  disable_spend_logs: true
+  disable_error_logs: true
+  disable_master_key_return: true

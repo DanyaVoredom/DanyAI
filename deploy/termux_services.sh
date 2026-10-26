@@ -28,6 +28,24 @@ EOF
   chmod +x "$dir/log/run"
 }
 
+llama_body='sleep 10
+cd "$HOME/DanyAI" || exit 1
+BIN="$HOME/llama.cpp/build/bin/llama-server"
+[ -x "$BIN" ] || { echo "llama-server не собран"; exec sleep 3600; }
+MODEL="$HOME/models_gguf/qwen35-2b-q4km.gguf"
+[ -f "$MODEL" ] || { echo "нет $MODEL"; exec sleep 3600; }
+LORA=""
+[ -f "$HOME/models_gguf/danyai-lora.gguf" ] && LORA="--lora $HOME/models_gguf/danyai-lora.gguf"
+timeout 5 termux-wake-lock 2>/dev/null || true
+exec "$BIN" -m "$MODEL" $LORA --host 0.0.0.0 --port 8081 -c 4096 -t 4 --jinja 2>&1'
+
+litellm_body='sleep 20
+cd "$HOME/DanyAI" || exit 1
+BIN=/data/data/com.termux/files/usr/bin/litellm
+[ -x "$BIN" ] || { echo "litellm не установлен"; exec sleep 3600; }
+timeout 5 termux-wake-lock 2>/dev/null || true
+exec "$BIN" --config configs/litellm.yaml --host 0.0.0.0 --port 4000 2>&1'
+
 server_body='sleep 5
 cd "$HOME/DanyAI" || exit 1
 timeout 5 termux-wake-lock 2>/dev/null || true
@@ -53,6 +71,8 @@ if [ -f runs/phone/ckpt.npz ]; then
 fi
 exec python -m danyai.train --config configs/phone.json --data data_phone --out runs/phone --steps $STEPS --workers $WORKERS"
 
+write_service danyai-llama "$llama_body"
+write_service danyai-litellm "$litellm_body"
 write_service danyai-server "$server_body"
 write_service danyai-webchat "$webchat_body"
 write_service danyai-train "$train_body"
@@ -65,12 +85,12 @@ pgrep -f "runsvdir $SVDIR" >/dev/null || exec runsvdir "$SVDIR"
 EOF
 chmod +x "$HOME/.termux/boot/danyai"
 
-for name in danyai-server danyai-webchat danyai-train; do
+for name in danyai-llama danyai-litellm danyai-server danyai-webchat danyai-train; do
   sv up "$name" 2>/dev/null || true
 done
 
 sleep 8
-for name in danyai-server danyai-webchat danyai-train; do
+for name in danyai-llama danyai-litellm danyai-server danyai-webchat danyai-train; do
   printf "%s: " "$name"
   sv status "$name" 2>/dev/null || echo "нет статуса"
 done
