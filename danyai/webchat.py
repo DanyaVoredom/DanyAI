@@ -163,6 +163,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         if delta:
             self._sse({"choices": [{"delta": {"content": delta}, "index": 0}]})
+    def _finish(self):
+        try:
+            self.wfile.write(b"data\n")
+            self.wfile.flush()
+        except Exception:
+            pass
+
+    def _fail(self, e):
+        try:
+            self._sse({"choices": [{"delta": {"content": "backend: " + str(e)[:120]}, "index": 0}]})
+        except Exception:
+            pass
+
     def _sse(self, obj):
         chunk = "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
         self.wfile.write(chunk.encode("utf-8"))
@@ -241,6 +254,7 @@ def main():
     ap.add_argument("--tok", default="data/tokenizer.json")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8090)
+    ap.add_argument("--api-base", default="")
     args = ap.parse_args()
 
     engine, _ = Engine.from_file(args.ckpt)
@@ -250,6 +264,7 @@ def main():
     threading.Thread(target=worker, args=(engine, tok, q, lock), daemon=True).start()
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     srv.jobs = q
+    srv.api_base = args.api_base or None
     print(f"http://{args.host}:{args.port}/", flush=True)
     srv.serve_forever()
 

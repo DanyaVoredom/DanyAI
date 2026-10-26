@@ -123,6 +123,29 @@ SM-F936B (Snapdragon 8+ Gen 1), модель Qwen3.5-2B Q4_K_M:
 Экран на зарядке держится командой `svc power stayon true`. Без рута поднять cgroup в фоне нельзя,
 переключатель cpuset пишется только из системы.
 
+## Установка litellm на Termux
+
+    python -m pip install --no-input maturin
+    CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+      python -m pip install --no-input litellm
+
+LTO выключен специально: rustc с lto=fat падает с LLVM out of memory на 11 ГБ памяти.
+Затем добираются зависимости прокси по одной, полный extra litellm[proxy] не ставится,
+потому что требует pyroscope-io, а тот не поддерживает Python 3.14:
+
+    fastapi uvicorn websockets python-multipart orjson backoff rq apscheduler
+    cryptography mcp expression fastapi-sso soundfile audioop-lts diskcache uvloop tzdata
+
+cryptography и litellm-rs собираются из исходников и требуют LD_PRELOAD при запуске,
+иначе abi3-модуль не находит символы libpython:
+
+    export LD_PRELOAD=/data/data/com.termux/files/usr/lib/libpython3.14.so
+
+Веб-чат умеет работать через любой OpenAI-совместимый бэкенд:
+
+    python -m danyai.webchat --ckpt models/model.npz --tok models/tokenizer.json \
+      --api-base http://127.0.0.1:8081/v1
+
 ## Android не убивает Termux
 Android 12+ убивает дочерние процессы Termux (phantom process killer), а doze выгружает приложение
 вместе с sshd. Лечится только через adb, изнутри Termux эти настройки недоступны:
