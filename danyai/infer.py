@@ -1,3 +1,4 @@
+import codecs
 import json
 import numpy as np
 
@@ -12,53 +13,51 @@ def _silu(x):
 
 
 def apply_penalties(logits, ids, repetition=1.0, presence=0.0, frequency=0.0, window=256):
-    lg = np.array(logits, dtype=np.float64, copy=True)
+    lg = np.array(logits, dtype=np.float32, copy=True)
     if not ids:
         return lg
-    hist = list(ids)[-window:] if window and window > 0 else list(ids)
-    counts = {}
-    for t in hist:
-        t = int(t)
-        counts[t] = counts.get(t, 0) + 1
-    idx = np.fromiter(counts.keys(), dtype=np.int64, count=len(counts))
-    cnt = np.fromiter(counts.values(), dtype=np.float64, count=len(counts))
-    idx = np.clip(idx, 0, lg.size - 1)
+    hist = np.asarray(list(ids)[-window:] if window and window > 0 else list(ids), dtype=np.int64)
+    np.clip(hist, 0, lg.size - 1, out=hist)
+    cnt = np.bincount(hist, minlength=lg.size).astype(np.float32)
+    idx = np.flatnonzero(cnt)
     if repetition and repetition != 1.0:
         v = lg[idx]
-        lg[idx] = np.where(v > 0, v / repetition, v * repetition)
+        lg[idx] = np.where(v > 0, v / np.float32(repetition), v * np.float32(repetition))
     if presence:
-        lg[idx] -= presence
+        lg[idx] -= np.float32(presence)
     if frequency:
-        lg[idx] -= frequency * cnt
+        lg[idx] -= np.float32(frequency) * cnt[idx]
     return lg
 
 
 def sample_token(logits, rng, temp=0.8, top_k=40, top_p=1.0):
-    lg = np.asarray(logits, dtype=np.float64)
+    lg = np.asarray(logits, dtype=np.float32)
     if temp is not None and temp <= 0:
         return int(lg.argmax())
     if temp != 1.0:
-        lg = lg / temp
+        lg = lg / np.float32(temp)
     if top_k and 0 < top_k < lg.size:
-        thr = np.partition(lg, -top_k)[-top_k]
-        lg = np.where(lg < thr, -np.inf, lg)
+        idx = np.argpartition(lg, -top_k)[-top_k:]
+        vals = lg[idx]
+    else:
+        idx = np.arange(lg.size, dtype=np.int64)
+        vals = lg
     if top_p and 0 < top_p < 1.0:
-        order = np.argsort(-lg)
-        sorted_lg = lg[order]
-        e = np.exp(sorted_lg - sorted_lg[0])
-        cdf = np.cumsum(e / e.sum())
-        cut = int(np.searchsorted(cdf, top_p) + 1)
-        keep = order[:cut]
-        masked = np.full_like(lg, -np.inf)
-        masked[keep] = lg[keep]
-        lg = masked
-    m = lg.max()
-    p = np.exp(lg - m)
+        order = np.argsort(-vals)
+        vals = vals[order]
+        idx = idx[order]
+        e = np.exp(vals - vals[0])
+        cdf = np.cumsum(e)
+        cut = int(np.searchsorted(cdf, np.float32(top_p) * cdf[-1]) + 1)
+        idx = idx[:cut]
+        vals = vals[:cut]
+    vals = vals - vals.max()
+    p = np.exp(vals)
     s = p.sum()
     if not np.isfinite(s) or s <= 0:
         return int(np.argmax(logits))
     p /= s
-    return int(rng.choice(p.size, p=p))
+    return int(idx[rng.choice(idx.size, p=p)])
 
 
 class Engine:
@@ -81,6 +80,20 @@ class Engine:
         self.quant = bool(cfg.get("quantized", False))
         self._rope = None
         self._bias = None
+        self._qkv = {}
+        self._gu = {}
+        wte = self.p.get("wte")
+        self._wte_t = np.ascontiguousarray(wte.T) if wte is not None else None
+        for i in range(self.n_layer):
+            wq = self.p.get(f"h{i}.wq")
+            wk = self.p.get(f"h{i}.wk")
+            wv = self.p.get(f"h{i}.wv")
+            if wq is not None and wk is not None and wv is not None:
+                self._qkv[i] = np.ascontiguousarray(np.concatenate([wq, wk, wv], axis=1))
+            w1 = self.p.get(f"h{i}.w1")
+            w3 = self.p.get(f"h{i}.w3")
+            if w1 is not None and w3 is not None:
+                self._gu[i] = np.ascontiguousarray(np.concatenate([w1, w3], axis=1))
 
     @classmethod
     def from_file(cls, path):
@@ -110,7 +123,7 @@ class Engine:
         return cls(cfg, params), cfg
 
     def new_cache(self, batch=1):
-        return {"k": [None] * self.n_layer, "v": [None] * self.n_layer, "pos": 0}
+        return {"k": [None] * self.n_layer, "v": [None] * self.n_layer, "pos": 0, "base": 0}
 
     def _norm(self, x, name):
         g = self.p[name + ".g"]
@@ -152,25 +165,43 @@ class Engine:
         H = self.n_head
         kv = self.n_kv
         hd = self.hd
-        q = (x @ P[f"h{i}.wq"]).reshape(B, Tn, H, hd).transpose(0, 2, 1, 3)
-        k = (x @ P[f"h{i}.wk"]).reshape(B, Tn, kv, hd).transpose(0, 2, 1, 3)
-        v = (x @ P[f"h{i}.wv"]).reshape(B, Tn, kv, hd).transpose(0, 2, 1, 3)
+        fused = self._qkv.get(i)
+        if fused is not None:
+            qkv = x @ fused
+            qw = H * hd
+            kw = kv * hd
+            q = qkv[..., :qw].reshape(B, Tn, H, hd).transpose(0, 2, 1, 3)
+            k = qkv[..., qw:qw + kw].reshape(B, Tn, kv, hd).transpose(0, 2, 1, 3)
+            v = qkv[..., qw + kw:].reshape(B, Tn, kv, hd).transpose(0, 2, 1, 3)
+        else:
+            q = (x @ P[f"h{i}.wq"]).reshape(B, Tn, H, hd).transpose(0, 2, 1, 3)
+            k = (x @ P[f"h{i}.wk"]).reshape(B, Tn, kv, hd).transpose(0, 2, 1, 3)
+            v = (x @ P[f"h{i}.wv"]).reshape(B, Tn, kv, hd).transpose(0, 2, 1, 3)
         if self.rope:
-            off = cache["pos"] if cache is not None else 0
+            off = (cache.get("base", 0) + cache["pos"]) if cache is not None else 0
             cos, sin = self._tables(off + Tn)
             cos = cos[off:off + Tn][None, None, :, :]
             sin = sin[off:off + Tn][None, None, :, :]
             q = self._rotate(q, cos, sin)
             k = self._rotate(k, cos, sin)
-        if cache is not None:
-            if cache["k"][i] is not None:
-                k = np.concatenate([cache["k"][i], k], axis=2)
-                v = np.concatenate([cache["v"][i], v], axis=2)
-            cache["k"][i] = k
-            cache["v"][i] = v
         if kv != H:
-            k = np.repeat(k, H // kv, axis=1)
-            v = np.repeat(v, H // kv, axis=1)
+            rep = H // kv
+            k = np.repeat(k, rep, axis=1)
+            v = np.repeat(v, rep, axis=1)
+        if cache is not None:
+            pos = cache["pos"]
+            ck = cache["k"][i]
+            if ck is None:
+                ck = np.zeros((B, H, self.block, hd), dtype=np.float32)
+                cv = np.zeros((B, H, self.block, hd), dtype=np.float32)
+                cache["k"][i] = ck
+                cache["v"][i] = cv
+            else:
+                cv = cache["v"][i]
+            ck[:, :, pos:pos + Tn] = k
+            cv[:, :, pos:pos + Tn] = v
+            k = ck[:, :, :pos + Tn]
+            v = cv[:, :, :pos + Tn]
         att = (q @ k.transpose(0, 1, 3, 2)) * np.float32(1.0 / np.sqrt(hd))
         att = att + self._bias_for(Tn, k.shape[2])
         att = att - att.max(-1, keepdims=True)
@@ -182,17 +213,35 @@ class Engine:
     def _mlp(self, x, i):
         P = self.p
         if self.ffn_kind == "swiglu":
-            a = x @ P[f"h{i}.w1"]
-            b = x @ P[f"h{i}.w3"]
-            h = _silu(a) * b
+            fused = self._gu.get(i)
+            if fused is not None:
+                gu = x @ fused
+                half = gu.shape[-1] // 2
+                h = _silu(gu[..., :half]) * gu[..., half:]
+            else:
+                a = x @ P[f"h{i}.w1"]
+                b = x @ P[f"h{i}.w3"]
+                h = _silu(a) * b
         else:
             h = _gelu(x @ P[f"h{i}.w1"] + P[f"h{i}.b1"])
         return h @ P[f"h{i}.w2"] + P[f"h{i}.b2"]
 
-    def forward(self, idx, cache=None):
+    def forward(self, idx, cache=None, logits_last=False):
         idx = np.asarray(idx, dtype=np.int64)
         B, Tn = idx.shape
         P = self.p
+        if cache is not None:
+            pos = cache["pos"]
+            if pos + Tn > self.block:
+                shift = pos + Tn - self.block
+                for i in range(self.n_layer):
+                    ck = cache["k"][i]
+                    if ck is not None:
+                        keep = pos - shift
+                        np.copyto(ck[:, :, :keep], ck[:, :, shift:pos])
+                        np.copyto(cache["v"][i][:, :, :keep], cache["v"][i][:, :, shift:pos])
+                cache["pos"] = pos = keep
+                cache["base"] = cache.get("base", 0) + shift
         if self.rope:
             x = P["wte"][idx]
         else:
@@ -202,9 +251,12 @@ class Engine:
             x = x + self._attn(self._norm(x, f"h{i}.ln1"), i, cache, B, Tn)
             x = x + self._mlp(self._norm(x, f"h{i}.ln2"), i)
         x = self._norm(x, "lnf")
-        logits = x @ P["wte"].T
+        if logits_last and Tn > 1:
+            logits = x[:, -1:] @ self._wte_t
+        else:
+            logits = x @ self._wte_t
         if cache is not None:
-            cache["pos"] += Tn
+            cache["pos"] = cache["pos"] + Tn
         return logits
 
     def next_logits(self, ids, cache):
@@ -220,27 +272,22 @@ class Engine:
         cache = self.new_cache(1)
         head = ids[-self.block:-1]
         if head:
-            self.forward(np.asarray([head], dtype=np.int64), cache)
+            self.forward(np.asarray([head], dtype=np.int64), cache, logits_last=True)
         out = bytearray()
         prev = ""
+        dec = codecs.getincrementaldecoder("utf-8")("replace")
         for _ in range(int(tokens)):
-            if cache["pos"] >= self.block:
-                cache = self.new_cache(1)
-                ctx = ids[-self.block:-1]
-                if ctx:
-                    self.forward(np.asarray([ctx], dtype=np.int64), cache)
             lg = self.next_logits([ids[-1]], cache)
             lg = apply_penalties(lg, ids, repetition, presence, frequency)
             nxt = sample_token(lg, rng, temp, top_k, top_p)
             ids.append(nxt)
             piece = tok.vocab.get(int(nxt))
             if piece:
-                out.extend(piece)
-                cur = out.decode("utf-8", errors="replace")
-                if cur.startswith(prev):
-                    delta = cur[len(prev):]
-                    prev = cur
-                    if delta and on_token is not None:
+                delta = dec.decode(piece)
+                if delta:
+                    out.extend(piece)
+                    prev += delta
+                    if on_token is not None:
                         on_token(delta, nxt)
             if stop and any(s in prev for s in stop):
                 break
