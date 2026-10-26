@@ -104,6 +104,25 @@ LoRA из safetensors в GGUF собирается на ПК (нужен torch �
 Модели в litellm: danyai-qwen (llama.cpp, 8081) и danyai-nano (свой numpy-сервер, 8080).
 Ключ и список моделей в configs/litellm.yaml.
 
+## Производительность и cpuset
+
+Android держит Termux в cgroup /moderate, когда приложение не на переднем плане: доступны только
+маленькие ядра 0-3 и всё считается в 5-7 раз медленнее. Проверка:
+
+    cat /proc/self/cgroup        # cpuset:/moderate
+    grep Cpus_allowed_list /proc/$$/status   # 0-3
+
+Когда Termux на экране, приложение попадает в /top-app и получает все ядра 0-7. Замеры на
+SM-F936B (Snapdragon 8+ Gen 1), модель Qwen3.5-2B Q4_K_M:
+
+    в фоне, только малые ядра     1.63 tok/s
+    на экране, ядра 4-7 (taskset)  10.9-11.5 tok/s
+    обучение 3.8M, 4 воркера       0.42 с/шаг
+
+Поэтому danyai-llama запускается через taskset -c 4-7, если маска доступна, а иначе как обычно.
+Экран на зарядке держится командой `svc power stayon true`. Без рута поднять cgroup в фоне нельзя,
+переключатель cpuset пишется только из системы.
+
 ## Android не убивает Termux
 Android 12+ убивает дочерние процессы Termux (phantom process killer), а doze выгружает приложение
 вместе с sshd. Лечится только через adb, изнутри Termux эти настройки недоступны:
