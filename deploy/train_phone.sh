@@ -6,6 +6,7 @@ cd ~/DanyAI
 DATA_DIR=${DATA_DIR:-data}
 OUT=${OUT:-runs/phone}
 STEPS=${STEPS:-12000}
+WORKERS=${WORKERS:-4}
 LOG=${LOG:-$OUT/train.log}
 
 termux-wake-lock 2>/dev/null || true
@@ -27,6 +28,7 @@ nohup python -m danyai.train \
   --data "$DATA_DIR" \
   --out "$OUT" \
   --steps "$STEPS" \
+  --workers "$WORKERS" \
   $RESUME >> "$LOG" 2>&1 &
 
 echo "pid $!"

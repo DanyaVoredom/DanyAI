@@ -6,6 +6,7 @@ PREFIX=${PREFIX:-/data/data/com.termux/files/usr}
 SVDIR="$PREFIX/var/service"
 HOME_DIR="$HOME/DanyAI"
 STEPS=${STEPS:-12000}
+WORKERS=${WORKERS:-4}
 
 export SVDIR
 mkdir -p "$HOME_DIR/logs"
@@ -48,9 +49,9 @@ if python -c \"import numpy as np,sys; z=np.load('runs/phone/ckpt.npz'); sys.exi
   exec sleep 3600
 fi
 if [ -f runs/phone/ckpt.npz ]; then
-  exec python -m danyai.train --config configs/phone.json --data data_phone --out runs/phone --steps $STEPS --resume runs/phone/ckpt.npz
+  exec python -m danyai.train --config configs/phone.json --data data_phone --out runs/phone --steps $STEPS --workers $WORKERS --resume runs/phone/ckpt.npz
 fi
-exec python -m danyai.train --config configs/phone.json --data data_phone --out runs/phone --steps $STEPS"
+exec python -m danyai.train --config configs/phone.json --data data_phone --out runs/phone --steps $STEPS --workers $WORKERS"
 
 write_service danyai-server "$server_body"
 write_service danyai-webchat "$webchat_body"

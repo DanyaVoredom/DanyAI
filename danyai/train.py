@@ -90,18 +90,6 @@ def _write_flat(dst, named, offs):
             buf[off:off + n] = np.asarray(g, dtype=np.float32).reshape(-1)
 
 
-def _write_data(dst, named, offs):
-    buf = np.frombuffer(dst, dtype=np.float32)
-    for (_, p), (shape, off, n) in zip(named, offs):
-        buf[off:off + n] = np.asarray(p.data, dtype=np.float32).reshape(-1)
-
-
-def _read_flat(src, named, offs):
-    buf = np.frombuffer(src, dtype=np.float32)
-    for (_, p), (shape, off, n) in zip(named, offs):
-        p.data[...] = buf[off:off + n].reshape(shape)
-
-
 PAR = {}
 
 
@@ -115,7 +103,7 @@ def _par_loop(rank):
     workers = args.workers
     micro = max(1, cfg["batch_size"] // workers)
     steps, warmup, clip = w["steps"], w["warmup"], w["clip"]
-    barrier, pshm, gshms = w["barrier"], w["pshm"], w["gshms"]
+    barrier, gshms = w["barrier"], w["gshms"]
     rng = np.random.default_rng(cfg.get("seed", 1337) + args.seed + 101 * rank)
     out = args.out
     best = w["best"]
@@ -130,18 +118,14 @@ def _par_loop(rank):
         _write_flat(gshms[rank], named, offs)
         barrier.wait()
 
-        if rank == 0:
-            acc = np.zeros(total, dtype=np.float32)
-            for g in gshms:
-                acc += np.frombuffer(g, dtype=np.float32)
-            acc /= workers
-            for (_, p), (shape, off, n) in zip(named, offs):
-                p.grad = acc[off:off + n].reshape(shape).copy()
-            gn = opt.clip(clip)
-            opt.step(lr)
-            _write_data(pshm, named, offs)
-        barrier.wait()
-        _read_flat(pshm, named, offs)
+        acc = np.zeros(total, dtype=np.float32)
+        for g in gshms:
+            acc += np.frombuffer(g, dtype=np.float32)
+        acc /= workers
+        for (_, p), (shape, off, n) in zip(named, offs):
+            p.grad = acc[off:off + n].reshape(shape).copy()
+        gn = opt.clip(clip)
+        opt.step(lr)
 
         if rank != 0:
             continue
@@ -177,16 +161,18 @@ def parallel_train(cfg, args, model, opt, train, val, start, steps, warmup, clip
         print("parallel training needs fork, falling back to 1 worker", flush=True)
         args.workers = 1
         return best
+    cpu = os.cpu_count() or 1
+    if args.workers > cpu - 1:
+        print(f"workers {args.workers} above cpu-1, clamping to {cpu - 1}", flush=True)
+        args.workers = max(1, cpu - 1)
     named = model.named_params()
     offs, total = _layout(named)
     gshms = [ctx.RawArray("f", total) for _ in range(args.workers)]
-    pshm = ctx.RawArray("f", total)
-    _write_data(pshm, named, offs)
     barrier = ctx.Barrier(args.workers)
 
     PAR.update({"cfg": cfg, "args": args, "model": model, "opt": opt, "train": train, "val": val,
                 "offs": offs, "total": total, "steps": steps, "warmup": warmup, "clip": clip,
-                "barrier": barrier, "pshm": pshm, "gshms": gshms, "start": start, "best": best})
+                "barrier": barrier, "gshms": gshms, "start": start, "best": best})
 
     procs = [ctx.Process(target=_par_loop, args=(r,), daemon=True) for r in range(1, args.workers)]
     for p in procs:
