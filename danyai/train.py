@@ -70,6 +70,129 @@ def lr_at(step, steps, base, warmup):
     return base * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * p)))
 
 
+def _layout(named):
+    offs = []
+    off = 0
+    for _, p in named:
+        n = p.data.size
+        offs.append((p.data.shape, off, n))
+        off += n
+    return offs, off
+
+
+def _write_flat(dst, named, offs):
+    buf = np.frombuffer(dst, dtype=np.float32)
+    for (_, p), (shape, off, n) in zip(named, offs):
+        g = p.grad
+        if g is None:
+            buf[off:off + n] = 0.0
+        else:
+            buf[off:off + n] = np.asarray(g, dtype=np.float32).reshape(-1)
+
+
+def _read_flat(src, named, offs):
+    buf = np.frombuffer(src, dtype=np.float32)
+    for (_, p), (shape, off, n) in zip(named, offs):
+        p.data[...] = buf[off:off + n].reshape(shape)
+
+
+PAR = {}
+
+
+def _par_loop(rank):
+    w = PAR
+    cfg, args = w["cfg"], w["args"]
+    model, opt = w["model"], w["opt"]
+    train, val = w["train"], w["val"]
+    named = model.named_params()
+    offs, total = w["offs"], w["total"]
+    workers = args.workers
+    micro = max(1, cfg["batch_size"] // workers)
+    steps, warmup, clip = w["steps"], w["warmup"], w["clip"]
+    barrier, pshm, gshms = w["barrier"], w["pshm"], w["gshms"]
+    rng = np.random.default_rng(cfg.get("seed", 1337) + args.seed + 101 * rank)
+    out = args.out
+    best = w["best"]
+    t0 = time.time()
+
+    for step in range(w["start"] + 1, steps + 1):
+        lr = lr_at(step, steps, cfg["lr"], warmup)
+        x, y = get_batch(train, cfg["block_size"], micro, rng)
+        loss = model.loss(x, y)
+        opt.zero()
+        backward(loss)
+        _write_flat(gshms[rank], named, offs)
+        barrier.wait()
+
+        if rank == 0:
+            acc = np.zeros(total, dtype=np.float32)
+            for g in gshms:
+                acc += np.frombuffer(g, dtype=np.float32)
+            acc /= workers
+            for (_, p), (shape, off, n) in zip(named, offs):
+                p.grad = acc[off:off + n].reshape(shape).copy()
+            gn = opt.clip(clip)
+            opt.step(lr)
+            _write_flat(pshm, named, offs)
+        barrier.wait()
+        _read_flat(pshm, named, offs)
+
+        if rank != 0:
+            continue
+
+        if step % cfg.get("log_every", 10) == 0:
+            el = time.time() - t0
+            print(f"step {step} loss {to_scalar(loss.data):.4f} lr {lr:.2e} gn {gn:.2f} {el:.0f}s", flush=True)
+        if step % cfg.get("eval_every", 200) == 0 or step == steps:
+            xv, yv = get_batch(val, cfg["block_size"], max(1, cfg["batch_size"] // 2), rng)
+            vl = to_scalar(model.loss(xv, yv).data)
+            ppl = math.exp(min(20.0, vl))
+            flag = ""
+            if vl < best:
+                best = vl
+                save(model, cfg, os.path.join(out, "best.npz"), step, best)
+                flag = " best"
+            print(f"eval step {step} val {vl:.4f} ppl {ppl:.2f}{flag}", flush=True)
+        if step % cfg.get("save_every", 500) == 0 or step == steps:
+            save(model, cfg, os.path.join(out, "ckpt.npz"), step, best)
+            save(model, cfg, os.path.join(out, f"ckpt_{step}.npz"), step, best)
+
+    if rank == 0:
+        w["best"] = best
+        print(f"done {time.time() - t0:.0f}s best val {best:.4f}", flush=True)
+
+
+def parallel_train(cfg, args, model, opt, train, val, start, steps, warmup, clip, best):
+    import multiprocessing as mp
+
+    try:
+        ctx = mp.get_context("fork")
+    except ValueError:
+        print("parallel training needs fork, falling back to 1 worker", flush=True)
+        args.workers = 1
+        return best
+    named = model.named_params()
+    offs, total = _layout(named)
+    gshms = [ctx.RawArray("f", total) for _ in range(args.workers)]
+    pshm = ctx.RawArray("f", total)
+    _write_flat(pshm, named, offs)
+    barrier = ctx.Barrier(args.workers)
+
+    PAR.update({"cfg": cfg, "args": args, "model": model, "opt": opt, "train": train, "val": val,
+                "offs": offs, "total": total, "steps": steps, "warmup": warmup, "clip": clip,
+                "barrier": barrier, "pshm": pshm, "gshms": gshms, "start": start, "best": best})
+
+    procs = [ctx.Process(target=_par_loop, args=(r,), daemon=True) for r in range(1, args.workers)]
+    for p in procs:
+        p.start()
+    try:
+        _par_loop(0)
+    finally:
+        for p in procs:
+            p.join(timeout=60)
+    return PAR.get("best", best)
+
+
 def save(model, cfg, path, step=0, best=float("inf")):
     state = {k: to_numpy(v) for k, v in model.state().items()}
     np.savez(path, cfg=np.array(json.dumps(cfg)), step=np.array(step), best=np.array(best), **state)
@@ -83,6 +206,7 @@ def main():
     ap.add_argument("--steps", type=int, default=0)
     ap.add_argument("--resume", default="")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--workers", type=int, default=1)
     args = ap.parse_args()
 
     with open(args.config, "r", encoding="utf-8") as f:
@@ -113,6 +237,10 @@ def main():
     clip = cfg.get("grad_clip", 1.0)
     os.makedirs(args.out, exist_ok=True)
     t0 = time.time()
+
+    if args.workers > 1:
+        parallel_train(cfg, args, model, opt, train, val, start, steps, warmup, clip, best)
+        return
 
     for step in range(start + 1, steps + 1):
         lr = lr_at(step, steps, cfg["lr"], warmup)
