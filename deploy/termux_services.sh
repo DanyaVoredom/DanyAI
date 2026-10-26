@@ -36,8 +36,10 @@ MODEL="$HOME/models_gguf/qwen35-2b-q4km.gguf"
 [ -f "$MODEL" ] || { echo "нет $MODEL"; exec sleep 3600; }
 LORA=""
 [ -f "$HOME/models_gguf/danyai-lora.gguf" ] && LORA="--lora $HOME/models_gguf/danyai-lora.gguf"
+TS=""
+taskset -c 4-7 true 2>/dev/null && TS="taskset -c 4-7"
 timeout 5 termux-wake-lock 2>/dev/null || true
-exec "$BIN" -m "$MODEL" $LORA --host 0.0.0.0 --port 8081 -c 4096 -t 4 --jinja 2>&1'
+exec $TS "$BIN" -m "$MODEL" $LORA --host 0.0.0.0 --port 8081 -c 2048 -np 1 -t 4 --jinja --chat-template-kwargs "{\"enable_thinking\": false}" 2>&1'
 
 litellm_body='sleep 20
 cd "$HOME/DanyAI" || exit 1
