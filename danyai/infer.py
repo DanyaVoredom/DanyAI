@@ -238,8 +238,9 @@ class Engine:
                     ck = cache["k"][i]
                     if ck is not None:
                         keep = pos - shift
-                        np.copyto(ck[:, :, :keep], ck[:, :, shift:pos])
-                        np.copyto(cache["v"][i][:, :, :keep], cache["v"][i][:, :, shift:pos])
+                        ck[:, :, :keep] = ck[:, :, shift:pos].copy()
+                        cv = cache["v"][i]
+                        cv[:, :, :keep] = cv[:, :, shift:pos].copy()
                 cache["pos"] = pos = keep
                 cache["base"] = cache.get("base", 0) + shift
         if self.rope:
