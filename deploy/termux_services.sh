@@ -39,7 +39,7 @@ LORA=""
 TS=""
 taskset -c 4-7 true 2>/dev/null && TS="taskset -c 4-7"
 timeout 5 termux-wake-lock 2>/dev/null || true
-exec $TS "$BIN" -m "$MODEL" $LORA --host 0.0.0.0 --port 8081 -c 2048 -np 1 -t 4 --jinja --chat-template-kwargs "{\"enable_thinking\": false}" 2>&1'
+exec $TS "$BIN" -m "$MODEL" $LORA --host 0.0.0.0 --port 8081 -c 1024 -np 1 -t 4 --jinja --chat-template-kwargs "{\"enable_thinking\": false}" 2>&1'
 
 litellm_body='sleep 20
 cd "$HOME/DanyAI" || exit 1
