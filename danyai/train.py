@@ -90,6 +90,12 @@ def _write_flat(dst, named, offs):
             buf[off:off + n] = np.asarray(g, dtype=np.float32).reshape(-1)
 
 
+def _write_data(dst, named, offs):
+    buf = np.frombuffer(dst, dtype=np.float32)
+    for (_, p), (shape, off, n) in zip(named, offs):
+        buf[off:off + n] = np.asarray(p.data, dtype=np.float32).reshape(-1)
+
+
 def _read_flat(src, named, offs):
     buf = np.frombuffer(src, dtype=np.float32)
     for (_, p), (shape, off, n) in zip(named, offs):
@@ -133,7 +139,7 @@ def _par_loop(rank):
                 p.grad = acc[off:off + n].reshape(shape).copy()
             gn = opt.clip(clip)
             opt.step(lr)
-            _write_flat(pshm, named, offs)
+            _write_data(pshm, named, offs)
         barrier.wait()
         _read_flat(pshm, named, offs)
 
@@ -175,7 +181,7 @@ def parallel_train(cfg, args, model, opt, train, val, start, steps, warmup, clip
     offs, total = _layout(named)
     gshms = [ctx.RawArray("f", total) for _ in range(args.workers)]
     pshm = ctx.RawArray("f", total)
-    _write_flat(pshm, named, offs)
+    _write_data(pshm, named, offs)
     barrier = ctx.Barrier(args.workers)
 
     PAR.update({"cfg": cfg, "args": args, "model": model, "opt": opt, "train": train, "val": val,
