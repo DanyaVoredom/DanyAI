@@ -152,15 +152,16 @@ class Engine:
         return np.concatenate([x1 * cos - x2 * sin, x1 * sin + x2 * cos], axis=-1)
 
     def _bias_for(self, Tq, Tk):
-        key = (Tq, Tk)
-        if self._bias is None or self._bias[0] != key:
-            q = np.arange(Tq)[:, None] + (Tk - Tq)
-            k = np.arange(Tk)[None, :]
-            b = np.where(k <= q, np.float32(0.0), np.float32(-1e9)).astype(np.float32)
-            self._bias = (key, b)
-        return self._bias[1]
+        if Tq == 1:
+            return None
+        m = self._bias
+        if m is None or m.shape[0] < Tk:
+            n = max(self.block, Tk)
+            m = np.triu(np.full((n, n), np.float32(-1e9), dtype=np.float32), k=1)
+            self._bias = m
+        return m[Tk - Tq:Tk, :Tk]
 
-    def _attn(self, x, i, cache, B, Tn):
+    def _attn(self, x, i, cache, B, Tn, cos=None, sin=None):
         P = self.p
         H = self.n_head
         kv = self.n_kv
@@ -177,11 +178,7 @@ class Engine:
             q = (x @ P[f"h{i}.wq"]).reshape(B, Tn, H, hd).transpose(0, 2, 1, 3)
             k = (x @ P[f"h{i}.wk"]).reshape(B, Tn, kv, hd).transpose(0, 2, 1, 3)
             v = (x @ P[f"h{i}.wv"]).reshape(B, Tn, kv, hd).transpose(0, 2, 1, 3)
-        if self.rope:
-            off = (cache.get("base", 0) + cache["pos"]) if cache is not None else 0
-            cos, sin = self._tables(off + Tn)
-            cos = cos[off:off + Tn][None, None, :, :]
-            sin = sin[off:off + Tn][None, None, :, :]
+        if cos is not None:
             q = self._rotate(q, cos, sin)
             k = self._rotate(k, cos, sin)
         if kv != H:
@@ -202,11 +199,15 @@ class Engine:
             cv[:, :, pos:pos + Tn] = v
             k = ck[:, :, :pos + Tn]
             v = cv[:, :, :pos + Tn]
-        att = (q @ k.transpose(0, 1, 3, 2)) * np.float32(1.0 / np.sqrt(hd))
-        att = att + self._bias_for(Tn, k.shape[2])
-        att = att - att.max(-1, keepdims=True)
-        e = np.exp(att)
-        e /= e.sum(-1, keepdims=True)
+        att = q @ k.transpose(0, 1, 3, 2)
+        att *= np.float32(1.0 / np.sqrt(hd))
+        bias = self._bias_for(Tn, k.shape[2])
+        if bias is not None:
+            att += bias
+        att -= att.max(-1, keepdims=True)
+        att = np.exp(att, out=att)
+        att /= att.sum(-1, keepdims=True)
+        e = att
         o = (e @ v).transpose(0, 2, 1, 3).reshape(B, Tn, self.n_embd)
         return o @ P[f"h{i}.wo"]
 
@@ -243,14 +244,19 @@ class Engine:
                         cv[:, :, :keep] = cv[:, :, shift:pos].copy()
                 cache["pos"] = pos = keep
                 cache["base"] = cache.get("base", 0) + shift
+        cos = sin = None
         if self.rope:
             x = P["wte"][idx]
+            off = (cache["base"] + cache["pos"]) if cache is not None else 0
+            c, sn = self._tables(off + Tn)
+            cos = c[off:off + Tn][None, None, :, :]
+            sin = sn[off:off + Tn][None, None, :, :]
         else:
             off = cache["pos"] if cache is not None else 0
             x = P["wte"][idx] + P["wpe"][off:off + Tn]
         for i in range(self.n_layer):
-            x = x + self._attn(self._norm(x, f"h{i}.ln1"), i, cache, B, Tn)
-            x = x + self._mlp(self._norm(x, f"h{i}.ln2"), i)
+            x += self._attn(self._norm(x, f"h{i}.ln1"), i, cache, B, Tn, cos, sin)
+            x += self._mlp(self._norm(x, f"h{i}.ln2"), i)
         x = self._norm(x, "lnf")
         if logits_last and Tn > 1:
             logits = x[:, -1:] @ self._wte_t
@@ -279,7 +285,8 @@ class Engine:
         dec = codecs.getincrementaldecoder("utf-8")("replace")
         for _ in range(int(tokens)):
             lg = self.next_logits([ids[-1]], cache)
-            lg = apply_penalties(lg, ids, repetition, presence, frequency)
+            if repetition != 1.0 or presence or frequency:
+                lg = apply_penalties(lg, ids, repetition, presence, frequency)
             nxt = sample_token(lg, rng, temp, top_k, top_p)
             ids.append(nxt)
             piece = tok.vocab.get(int(nxt))
