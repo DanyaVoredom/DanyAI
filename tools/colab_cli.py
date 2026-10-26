@@ -124,24 +124,67 @@ SFT_TORCH = """!python -m danyai.torch_sft --ckpt __RUNS__/best.npz --data data/
 !python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Придумай короткую историю про кота.<|assistant|>" --tokens 120 --temp 0.7
 print("sft done")"""
 
-TRAIN_LORA = """!python tools/finetune_lora.py --model __MODEL__ --data data/sft.jsonl --out __RUNS__/lora --max-len 1024 --batch 4 --grad-accum 4 --lr 1e-4 --warmup 30 --epochs 1 --eval-share 0.005 --eval-every 100 --limit __LIMIT__ --fallback Qwen/Qwen2.5-1.5B-Instruct
+TRAIN_LORA = """!PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -u tools/finetune_lora.py --model __MODEL__ --data data/sft.jsonl,data/tools.jsonl --out __RUNS__/lora --max-len 512 --batch 2 --grad-accum 8 --lr 1e-4 --warmup 30 --epochs 1 --eval-share 0.005 --eval-every 100 --limit __LIMIT__ --fallback Qwen/Qwen2.5-1.5B-Instruct
 print("lora done")"""
 
-PACK_LORA = """import base64, pathlib, zipfile
+PACK_LORA = """import base64, pathlib, time, uuid, urllib.request, zipfile
 src = pathlib.Path("__RUNS__/lora")
 zp = pathlib.Path("__RUNS__/lora.zip")
-if src.exists():
+if not src.exists():
+    print("@@MISSING __RUNS__/lora")
+else:
     with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
         for f in sorted(src.rglob("*")):
             if f.is_file():
                 z.write(f, f.relative_to(src))
-    b = base64.b64encode(zp.read_bytes()).decode()
-    print(f"@@BEGIN __RUNS__/lora.zip {len(b)}")
-    for i in range(0, len(b), 50000):
-        print(b[i:i + 50000])
-    print("@@END __RUNS__/lora.zip")
-else:
-    print("@@MISSING __RUNS__/lora")
+    data = zp.read_bytes()
+    print("zip bytes", len(data), flush=True)
+
+    def post(url, fields, field, filename, payload, timeout=600):
+        boundary = "----danyai" + uuid.uuid4().hex
+        body = b""
+        for k, v in fields:
+            body += ("--" + boundary + "\\r\\nContent-Disposition: form-data; name=\\"" + k + "\\"\\r\\n\\r\\n" + v + "\\r\\n").encode()
+        body += ("--" + boundary + "\\r\\nContent-Disposition: form-data; name=\\"" + field + "\\"; filename=\\"" + filename + "\\"\\r\\nContent-Type: application/octet-stream\\r\\n\\r\\n").encode()
+        body += payload + ("\\r\\n--" + boundary + "--\\r\\n").encode()
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "multipart/form-data; boundary=" + boundary})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode(errors="replace").strip()
+
+    urls = []
+    for attempt in range(3):
+        try:
+            u = post("https://litterbox.catbox.moe/resources/internals/api.php",
+                     [("reqtype", "fileupload"), ("time", "72h")], "fileToUpload", "lora.zip", data)
+            if u.startswith("http"):
+                urls.append(("litterbox", u))
+                break
+        except Exception as e:
+            print("litterbox fail", type(e).__name__, str(e)[:120], flush=True)
+            time.sleep(5 * (attempt + 1))
+    if not urls:
+        try:
+            u = post("https://0x0.st", [], "file", "lora.zip", data)
+            if u.startswith("http"):
+                urls.append(("0x0", u.split()[0]))
+        except Exception as e:
+            print("0x0 fail", type(e).__name__, str(e)[:120], flush=True)
+    if not urls:
+        try:
+            u = post("https://catbox.moe/user/api.php",
+                     [("reqtype", "fileupload")], "fileToUpload", "lora.zip", data)
+            if u.startswith("http"):
+                urls.append(("catbox", u))
+        except Exception as e:
+            print("catbox fail", type(e).__name__, str(e)[:120], flush=True)
+    for host, u in urls:
+        print("URL", host, u, flush=True)
+    if not urls:
+        b = base64.b64encode(data).decode()
+        print("@@BEGIN __RUNS__/lora.zip " + str(len(b)))
+        for i in range(0, len(b), 50000):
+            print(b[i:i + 50000])
+        print("@@END __RUNS__/lora.zip")
 print("pack lora done")"""
 
 PACK = """import base64, pathlib
@@ -1073,6 +1116,8 @@ def main():
         url = args.url
     else:
         names = ["train.bin", "val.bin", "tokenizer.json", "meta.json", "sft.jsonl"]
+        if args.trainer == "lora":
+            names.append("tools.jsonl")
         if args.data_release:
             repo = repo_slug()
             base = f"https://github.com/{repo}/releases/download/{args.data_release}/"
