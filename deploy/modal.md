@@ -2,17 +2,19 @@
 
 Обучение на GPU через Modal. Артефакты не выкладываются на файлохостинги: они пишутся в Modal volume и забираются командой `modal volume get`.
 
-## Установка клиента
+## Клиент на ПК через туннель на телефон
 
-С этого ПК api.modal.com не отвечает на TLS-хендшейк (python, curl, schannel таймаут; Chrome и телефон проходят), поэтому клиент ставится на телефон:
+С этого ПК api.modal.com не отвечает на TLS-хендшейк (python, curl, schannel таймаут; Chrome и телефон проходят). Клиент остаётся на ПК, трафик идёт через SOCKS-туннель на телефоне:
 
-    pkg install -y rust          # watchfiles собирается из исходников
-    pip install modal
+    python -m pip install modal python-socks aiohttp-socks
+    ssh -N -D 1080 homevps
+    $env:HTTP_PROXY="socks5h://127.0.0.1:1080"
+    $env:HTTPS_PROXY="socks5h://127.0.0.1:1080"
+    $env:ALL_PROXY="socks5h://127.0.0.1:1080"
+    $env:NO_PROXY="localhost,127.0.0.1,192.168.0.0/24"
     python -m modal setup
 
-Токен создаётся в браузере на ПК. Callback-порт телефона пробрасывается:
-
-    ssh -N -L 8686:127.0.0.1:8686 homevps
+Ставить что-либо на телефоне не нужно: Termux выгружается по памяти при обучении.
 
 ## Обучение 20M
 
