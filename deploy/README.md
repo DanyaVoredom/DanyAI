@@ -28,6 +28,10 @@
     sv status danyai-server
     tail -f ~/DanyAI/logs/danyai-train/current
 
+Никаких pkg install и тяжёлых бенчмарков на телефоне: при обучении занято 6-8 ГБ из 11,
+Android выгружает Termux вместе с sshd. Пакеты ставятся только на ПК, на телефоне допускаются
+только ssh-команды чтения и перезапуск сервисов.
+
 Скрипт ждёт чекпоинт в models/model.npz и токенизатор в models/tokenizer.json.
 Без systemd автозапуск делается через termux-boot: положить `bash ~/DanyAI/deploy/termux.sh` в ~/.termux/boot/start-danyai.
 
