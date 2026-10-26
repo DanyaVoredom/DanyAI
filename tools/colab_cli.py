@@ -152,6 +152,16 @@ else:
             return r.read().decode(errors="replace").strip()
 
     urls = []
+    try:
+        import json as _json
+        with urllib.request.urlopen("https://api.gofile.io/servers", timeout=60) as r:
+            srv = _json.load(r)["data"]["servers"][0]["name"]
+        u = post("https://%s.gofile.io/contents/uploadfile" % srv, [], "file", "lora.zip", data, timeout=1800)
+        page = _json.loads(u).get("data", {}).get("downloadPage", "")
+        if page.startswith("http"):
+            urls.append(("gofile", page))
+    except Exception as e:
+        print("gofile fail", type(e).__name__, str(e)[:120], flush=True)
     for attempt in range(3):
         try:
             u = post("https://litterbox.catbox.moe/resources/internals/api.php",
@@ -258,13 +268,15 @@ def notebook(cells):
     }
     for src in cells:
         lines = src.splitlines(True)
-        nb["cells"].append({
-            "cell_type": "code",
-            "metadata": {},
-            "execution_count": None,
-            "outputs": [],
-            "source": lines,
-        })
+        nb["cells"].append(
+            {
+                "cell_type": "code",
+                "metadata": {},
+                "execution_count": None,
+                "outputs": [],
+                "source": lines,
+            }
+        )
     return nb
 
 
@@ -282,7 +294,9 @@ def build(train_cell, use_git, artifacts):
 def publish(path, desc):
     out = subprocess.run(
         ["gh", "gist", "create", "--public", "--desc", desc, str(path)],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if out.returncode != 0:
         raise RuntimeError(out.stderr.strip() or "gist create failed")
@@ -304,7 +318,12 @@ CHROME_ARGS = [
     "--disable-site-isolation-trials",
 ]
 
-SIGNIN_WORDS = ("Требуется вход", "sign-in required", "Sign in required", "Войдите в аккаунт")
+SIGNIN_WORDS = (
+    "Требуется вход",
+    "sign-in required",
+    "Sign in required",
+    "Войдите в аккаунт",
+)
 
 GITHUB_WORDS = ("Запросить авторизацию", "Authorize with GitHub")
 
@@ -358,8 +377,6 @@ def login_dialog(page):
         except Exception:
             continue
     return False
-
-
 
 
 def alive(ctx):
@@ -651,6 +668,7 @@ def ensure_connected(page, timeout):
         page.wait_for_timeout(2000)
     return False
 
+
 OUTPUT_JS = """() => {
   const skip = '.CodeMirror, .cm-editor, .inputarea, .markdown, .editor, .monaco-editor';
   const out = [];
@@ -685,14 +703,21 @@ def editor_text(page):
 
 
 def run_started(page):
-    return running(page) or bool(editor_text(page).strip()) or "setup done" in frames_text(page)
+    return (
+        running(page)
+        or bool(editor_text(page).strip())
+        or "setup done" in frames_text(page)
+    )
 
 
 def wait_ready(page, timeout):
     end = time.time() + timeout
     while time.time() < end:
         try:
-            if page.locator("textarea.inputarea").count() > 0 and page.locator(".cell").count() > 0:
+            if (
+                page.locator("textarea.inputarea").count() > 0
+                and page.locator(".cell").count() > 0
+            ):
                 return True
         except Exception:
             pass
@@ -803,7 +828,11 @@ FIND_TEXT_JS = r"""(labels) => {
 
 
 def _find_chrome():
-    roots = [os.environ.get("PROGRAMFILES", ""), os.environ.get("PROGRAMFILES(X86)", ""), os.environ.get("LOCALAPPDATA", "")]
+    roots = [
+        os.environ.get("PROGRAMFILES", ""),
+        os.environ.get("PROGRAMFILES(X86)", ""),
+        os.environ.get("LOCALAPPDATA", ""),
+    ]
     for root in roots:
         if not root:
             continue
@@ -823,12 +852,20 @@ def _free_port():
 
 def _pids(profile):
     path = str(profile).replace("'", "''")
-    script = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-              "Where-Object { $_.CommandLine -and $_.CommandLine.Contains('" + path + "') } | "
-              "ForEach-Object { $_.ProcessId }")
+    script = (
+        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+        "Where-Object { $_.CommandLine -and $_.CommandLine.Contains('"
+        + path
+        + "') } | "
+        "ForEach-Object { $_.ProcessId }"
+    )
     try:
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
-                             capture_output=True, text=True, check=False).stdout
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
     except Exception:
         return []
     return [int(x) for x in out.split() if x.strip().isdigit()]
@@ -836,8 +873,9 @@ def _pids(profile):
 
 def kill_profile(profile):
     for pid in _pids(profile):
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                       capture_output=True, check=False)
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, check=False
+        )
 
 
 def _spawn(profile, headed, port):
@@ -906,8 +944,11 @@ def teardown(ctx, proc, profile=None):
             except Exception:
                 pass
         try:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                           capture_output=True, check=False)
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                check=False,
+            )
         except Exception:
             pass
 
@@ -944,7 +985,12 @@ def start_run(page, first_cell=""):
     if accept_run(page, wait=8.0):
         return True
     text = editor_text(page)
-    if first_cell and first_cell.strip() and first_cell.strip()[:60] not in text and not running(page):
+    if (
+        first_cell
+        and first_cell.strip()
+        and first_cell.strip()[:60] not in text
+        and not running(page)
+    ):
         return False
     if running(page):
         return True
@@ -974,7 +1020,7 @@ def make_data_bundle(data_dir, out_path):
             b = base64.b64encode(p.read_bytes()).decode()
             f.write(f"@@FILE {name} {len(b)}\n")
             for i in range(0, len(b), 76):
-                f.write(b[i:i + 76] + "\n")
+                f.write(b[i : i + 76] + "\n")
             f.write("@@END " + name + "\n")
     log(f"bundle {out_path} {out_path.stat().st_size} bytes")
 
@@ -1058,7 +1104,9 @@ def start_with_slot(page, first_cell, timeout, check_every=180):
 
 
 def repo_slug():
-    r = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
+    r = subprocess.run(
+        ["git", "remote", "get-url", "origin"], capture_output=True, text=True
+    )
     url = r.stdout.strip()
     m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
     if not m:
@@ -1070,10 +1118,26 @@ def upload_data_release(tag, data_dir, names):
     paths = [str(Path(data_dir) / n) for n in names if (Path(data_dir) / n).exists()]
     if not paths:
         raise RuntimeError("no data files to upload")
-    subprocess.run(["gh", "release", "create", tag, "--title", tag,
-                    "--notes", "danyai corpus bundle", "--latest=false"], capture_output=True, check=False)
-    r = subprocess.run(["gh", "release", "upload", tag] + paths + ["--clobber"],
-                       capture_output=True, text=True)
+    subprocess.run(
+        [
+            "gh",
+            "release",
+            "create",
+            tag,
+            "--title",
+            tag,
+            "--notes",
+            "danyai corpus bundle",
+            "--latest=false",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    r = subprocess.run(
+        ["gh", "release", "upload", tag] + paths + ["--clobber"],
+        capture_output=True,
+        text=True,
+    )
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or "release upload failed")
     log(f"uploaded {len(paths)} files to release {tag}")
@@ -1083,7 +1147,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="")
     ap.add_argument("--notebook", default="colab/train_danyai.ipynb")
-    ap.add_argument("--profile", default=str(Path(os.environ.get("LOCALAPPDATA", ".")) / "DanyAI" / "colab-profile"))
+    ap.add_argument(
+        "--profile",
+        default=str(
+            Path(os.environ.get("LOCALAPPDATA", ".")) / "DanyAI" / "colab-profile"
+        ),
+    )
     ap.add_argument("--out", default="runs/mini")
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--steps", type=int, default=2000)
@@ -1095,7 +1164,9 @@ def main():
     ap.add_argument("--config", default="configs/modern.json")
     ap.add_argument("--runs", default="/content/danyai_runs")
     ap.add_argument("--data-release", default="")
-    ap.add_argument("--trainer", default="autograd", choices=["autograd", "torch", "lora"])
+    ap.add_argument(
+        "--trainer", default="autograd", choices=["autograd", "torch", "lora"]
+    )
     ap.add_argument("--timeout", type=int, default=21600)
     ap.add_argument("--connect-wait", type=int, default=5400)
     ap.add_argument("--ready-wait", type=int, default=180)
@@ -1114,7 +1185,11 @@ def main():
         with sync_playwright() as p:
             ctx, proc = connect(p, args.profile, True)
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            page.goto("https://accounts.google.com", wait_until="domcontentloaded", timeout=60000)
+            page.goto(
+                "https://accounts.google.com",
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
             log("sign in then close browser")
             try:
                 while alive(ctx):
@@ -1123,7 +1198,6 @@ def main():
                 pass
             teardown(ctx, proc, args.profile)
         return 0
-
 
     out = Path(args.out)
     nb_path = Path(args.notebook)
@@ -1150,22 +1224,25 @@ def main():
             log(f"data raw {data_raw}")
             bundle_cell = BUNDLE.replace("__DATA_RAW__", data_raw)
         if args.trainer == "lora":
-            train = (TRAIN_LORA.replace("__MODEL__", args.model)
-                     .replace("__RUNS__", args.runs)
-                     .replace("__LIMIT__", str(args.lora_limit)))
+            train = (
+                TRAIN_LORA.replace("__MODEL__", args.model)
+                .replace("__RUNS__", args.runs)
+                .replace("__LIMIT__", str(args.lora_limit))
+            )
             cells = [SETUP_LORA, bundle_cell, train]
             if not args.no_artifacts:
                 cells.append(PACK_LORA.replace("__RUNS__", args.runs))
         else:
             tpl = TRAIN_TORCH if args.trainer == "torch" else TRAIN
             sft_tpl = SFT_TORCH if args.trainer == "torch" else SFT
-            train = (tpl
-                     .replace("__CONFIG__", args.config)
-                     .replace("__RUNS__", args.runs)
-                     .replace("__BLOCK__", str(args.block))
-                     .replace("__BATCH__", str(args.batch))
-                     .replace("__STEPS__", str(args.steps))
-                     .replace("__WARMUP__", str(args.warmup)))
+            train = (
+                tpl.replace("__CONFIG__", args.config)
+                .replace("__RUNS__", args.runs)
+                .replace("__BLOCK__", str(args.block))
+                .replace("__BATCH__", str(args.batch))
+                .replace("__STEPS__", str(args.steps))
+                .replace("__WARMUP__", str(args.warmup))
+            )
             sft_cell = sft_tpl.replace("__RUNS__", args.runs)
             setup_cell = SETUP_TORCH if args.trainer == "torch" else SETUP
             cells = [setup_cell, bundle_cell, train, sft_cell]
@@ -1174,7 +1251,9 @@ def main():
                 cells.append(PACK_SFT.replace("__RUNS__", args.runs))
         nb = notebook(cells)
         nb_path.parent.mkdir(parents=True, exist_ok=True)
-        nb_path.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
+        nb_path.write_text(
+            json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8"
+        )
         gist = publish(nb_path, "danyai colab run")
         log(f"gist {gist}")
         url = gist_colab_url(gist)
