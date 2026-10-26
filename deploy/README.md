@@ -32,8 +32,22 @@
 Android выгружает Termux вместе с sshd. Пакеты ставятся только на ПК, на телефоне допускаются
 только ssh-команды чтения и перезапуск сервисов.
 
-## Android не убивает Termux
+## Рут на телефоне
 
+Проверено на SM-F936B (Galaxy Z Fold4, Snapdragon 8+ Gen 1, Android 16, One UI 8):
+
+    ro.build.type=user, ro.debuggable=0    adb root недоступен
+    verifiedbootstate green, flash.locked  загрузчик залочен, vbmeta locked, verity enforcing
+    oem_lock service                       любой вызов: SecurityException, нужно
+                                           android.permission.MANAGE_CARRIER_OEM_UNLOCK_STATE
+
+Samsung не реализует fastboot, разблокировка только через download mode после переключателя
+OEM unlocking, а в One UI 8 его убрали из интерфейса. Обойти из adb shell нельзя: единственный
+вызывающий oem_lock с нужным правом - системный Settings. BROM-эксплойты (mtkclient) только для
+MediaTek, здесь Qualcomm с подписанным firehose, публичного загрузчика для F936B нет.
+Итог: рута и разблокировки на этом устройстве нет, и для задачи они не нужны.
+
+## Android не убивает Termux
 Android 12+ убивает дочерние процессы Termux (phantom process killer), а doze выгружает приложение
 вместе с sshd. Лечится только через adb, изнутри Termux эти настройки недоступны:
 
