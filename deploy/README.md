@@ -76,6 +76,34 @@ root. Круг замкнут.
 загрузчик (SW REV CHECK FAIL), поэтому abl от One UI 7 туда не встанет. Штатного пути к
 переключателю OEM на этом устройстве нет ни через adb, ни через Odin.
 
+## llama.cpp и litellm на телефоне
+
+Инференс через llama.cpp поверх GGUF, а litellm работает шлюзом с одним OpenAI-совместимым адресом
+для всех моделей DanyAI.
+
+    bash deploy/build_llama_termux.sh        # cmake + сборка llama-server, один раз
+    bash deploy/termux_services.sh           # регистрирует danyai-llama (8081) и danyai-litellm (4000)
+
+Модель качается отдельно (1.31 ГБ, Q4_K_M):
+
+    curl -L -C - -o ~/models_gguf/qwen35-2b-q4km.gguf \
+      https://huggingface.co/noTrabajo/Huihui-Qwen3.5-2B-abliterated-Q4_K_M-GGUF/resolve/main/huihui-qwen3.5-2b-abliterated-q4_k_m.gguf
+
+LoRA из safetensors в GGUF собирается на ПК (нужен torch и клон llama.cpp):
+
+    python tools/export_lora_gguf.py --llama /path/to/llama.cpp --adapter runs/lora/lora \
+      --out ~/models_gguf/danyai-lora.gguf
+
+Если файл ~/models_gguf/danyai-lora.gguf существует, danyai-llama подхватит его через --lora.
+Сервисы danyai-llama и danyai-litellm сами уходят в sleep, пока нет бинарника или модели,
+так что runit не крутит их в цикле перезапуска.
+
+    curl -s localhost:8081/v1/models
+    curl -s -H "Authorization: Bearer sk-danyai-local" localhost:4000/v1/models
+
+Модели в litellm: danyai-qwen (llama.cpp, 8081) и danyai-nano (свой numpy-сервер, 8080).
+Ключ и список моделей в configs/litellm.yaml.
+
 ## Android не убивает Termux
 Android 12+ убивает дочерние процессы Termux (phantom process killer), а doze выгружает приложение
 вместе с sshd. Лечится только через adb, изнутри Termux эти настройки недоступны:
