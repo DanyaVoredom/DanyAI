@@ -63,6 +63,19 @@ MediaTek, здесь Qualcomm с подписанным firehose, публичн
 Обойти это можно только заменив apk в /system или подменив подпись платформы, а для этого уже нужен
 root. Круг замкнут.
 
+Метод с подменой abl.elf.lz4 из One UI 7 в BL от One UI 8 (droidwin) для этого телефона не работает
+из-за anti-rollback. Разрядность прошивки это 5-й символ с конца PDA:
+
+    F936BXXSAHYI1  One UI 7 (Android 15)   bit A
+    F936BXXUAHYD9  One UI 7 (Android 15)   bit A
+    F936BXXUAIYIF  One UI 8 (Android 16)   bit A
+    F936BXXSBIZD1  One UI 8, 2026-04       bit B
+    F936BXXSCIZH3  стоит сейчас, 2026-08   bit C
+
+Все прошивки One UI 7 для F936B имеют bit A, а на телефоне bit C. Понижение bit блокирует
+загрузчик (SW REV CHECK FAIL), поэтому abl от One UI 7 туда не встанет. Штатного пути к
+переключателю OEM на этом устройстве нет ни через adb, ни через Odin.
+
 ## Android не убивает Termux
 Android 12+ убивает дочерние процессы Termux (phantom process killer), а doze выгружает приложение
 вместе с sshd. Лечится только через adb, изнутри Termux эти настройки недоступны:
