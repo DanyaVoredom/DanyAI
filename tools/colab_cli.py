@@ -177,6 +177,23 @@ else:
                 urls.append(("catbox", u))
         except Exception as e:
             print("catbox fail", type(e).__name__, str(e)[:120], flush=True)
+    if not urls and len(data) > 4 * 1024 * 1024:
+        chunk = 8 * 1024 * 1024
+        part = 0
+        for i in range(0, len(data), chunk):
+            blob = data[i:i + chunk]
+            for attempt in range(3):
+                try:
+                    u = post("https://litterbox.catbox.moe/resources/internals/api.php",
+                             [("reqtype", "fileupload"), ("time", "72h")], "fileToUpload",
+                             "lora_%02d.bin" % part, blob)
+                    if u.startswith("http"):
+                        urls.append(("part%02d" % part, u))
+                        break
+                except Exception as e:
+                    print("part fail", part, type(e).__name__, str(e)[:100], flush=True)
+                    time.sleep(5)
+            part += 1
     for host, u in urls:
         print("URL", host, u, flush=True)
     if not urls:

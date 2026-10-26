@@ -84,6 +84,28 @@ async function go(){
 """
 
 
+
+def parse_turns(prompt):
+    turns = []
+    i = 0
+    while True:
+        u = prompt.find("<|user|>", i)
+        if u < 0:
+            break
+        a = prompt.find("<|assistant|>", u)
+        if a < 0:
+            break
+        user = prompt[u + 8:a]
+        nxt = prompt.find("<|user|>", a)
+        seg = prompt[a + 13:(nxt if nxt >= 0 else len(prompt))]
+        ai = seg.split("<|end|>")[0]
+        turns.append({"role": "user", "content": user})
+        if ai:
+            turns.append({"role": "assistant", "content": ai})
+        i = nxt if nxt >= 0 else len(prompt)
+    return turns
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
