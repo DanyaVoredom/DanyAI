@@ -47,6 +47,22 @@ OEM unlocking, а в One UI 8 его убрали из интерфейса. О�
 MediaTek, здесь Qualcomm с подписанным firehose, публичного загрузчика для F936B нет.
 Итог: рута и разблокировки на этом устройстве нет, и для задачи они не нужны.
 
+Что пробовали по части подмены приложений с правами (все попытки упираются в подпись и SELinux):
+
+    свой apk с MANAGE_USER_OEM_UNLOCK_STATE    ставится, право не выдаётся,
+    и MANAGE_CARRIER_OEM_UNLOCK_STATE          ServiceManager.getService("oem_lock") возвращает null -
+                                               SELinux не даёт домену приложения даже увидеть службу
+    переподпись системного apk своим ключом    INSTALL_FAILED_UPDATE_INCOMPATIBLE,
+                                               подписи не совпадают
+    android:sharedUserId=android.uid.system    INSTALL_FAILED_SHARED_USER_INCOMPATIBLE,
+                                               нет подписи, совпадающей с shared user
+    adb shell pm grant <право>                 SecurityException: not a changeable permission type
+    adb shell service call oem_lock ...        SecurityException: нужно
+                                               MANAGE_CARRIER_OEM_UNLOCK_STATE
+
+Обойти это можно только заменив apk в /system или подменив подпись платформы, а для этого уже нужен
+root. Круг замкнут.
+
 ## Android не убивает Termux
 Android 12+ убивает дочерние процессы Termux (phantom process killer), а doze выгружает приложение
 вместе с sshd. Лечится только через adb, изнутри Termux эти настройки недоступны:
