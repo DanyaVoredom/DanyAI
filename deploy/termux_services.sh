@@ -29,19 +29,19 @@ EOF
 
 server_body='sleep 5
 cd "$HOME/DanyAI" || exit 1
-termux-wake-lock 2>/dev/null
+timeout 5 termux-wake-lock 2>/dev/null || true
 export OPENBLAS_NUM_THREADS=2
 exec python -m danyai.server --ckpt models/model.npz --tok models/tokenizer.json --host 0.0.0.0 --port 8080 2>&1'
 
 webchat_body='sleep 5
 cd "$HOME/DanyAI" || exit 1
-termux-wake-lock 2>/dev/null
+timeout 5 termux-wake-lock 2>/dev/null || true
 export OPENBLAS_NUM_THREADS=2
 exec python -m danyai.webchat --ckpt models/model.npz --tok models/tokenizer.json --host 0.0.0.0 --port 8090 2>&1'
 
 train_body="sleep 60
 cd \"\$HOME/DanyAI\" || exit 1
-termux-wake-lock 2>/dev/null
+timeout 5 termux-wake-lock 2>/dev/null || true
 mkdir -p runs/phone
 if python -c \"import numpy as np,sys; z=np.load('runs/phone/ckpt.npz'); sys.exit(0 if int(z['step']) >= $STEPS else 1)\" 2>/dev/null; then
   echo \"обучение завершено, $STEPS шагов\"
@@ -59,7 +59,7 @@ write_service danyai-train "$train_body"
 mkdir -p "$HOME/.termux/boot"
 cat > "$HOME/.termux/boot/danyai" <<EOF
 #!/data/data/com.termux/files/usr/bin/sh
-termux-wake-lock 2>/dev/null
+timeout 5 termux-wake-lock 2>/dev/null || true
 pgrep -f "runsvdir $SVDIR" >/dev/null || exec runsvdir "$SVDIR"
 EOF
 chmod +x "$HOME/.termux/boot/danyai"
