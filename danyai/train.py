@@ -80,6 +80,18 @@ def _layout(named):
     return offs, off
 
 
+def _write_data(dst, named, offs):
+    buf = np.frombuffer(dst, dtype=np.float32)
+    for (_, p), (shape, off, n) in zip(named, offs):
+        buf[off:off + n] = np.asarray(p.data, dtype=np.float32).reshape(-1)
+
+
+def _read_flat(src, named, offs):
+    buf = np.frombuffer(src, dtype=np.float32)
+    for (_, p), (shape, off, n) in zip(named, offs):
+        p.data[...] = buf[off:off + n].reshape(shape)
+
+
 def _write_flat(dst, named, offs):
     buf = np.frombuffer(dst, dtype=np.float32)
     for (_, p), (shape, off, n) in zip(named, offs):
@@ -90,24 +102,26 @@ def _write_flat(dst, named, offs):
             buf[off:off + n] = np.asarray(g, dtype=np.float32).reshape(-1)
 
 
-PAR = {}
-
-
-def _par_loop(rank):
-    w = PAR
+def _par_loop(rank, w):
     cfg, args = w["cfg"], w["args"]
-    model, opt = w["model"], w["opt"]
-    train, val = w["train"], w["val"]
+    model = w.get("model")
+    if model is None:
+        model = GPT(cfg)
+        model.load_state(w["state"])
+    opt = AdamW(model.named_params(), cfg["lr"], wd=cfg.get("weight_decay", 0.1))
+    train = np.memmap(os.path.join(w["data"], "train.bin"), dtype=w["dtype"], mode="r")
+    val = np.memmap(os.path.join(w["data"], "val.bin"), dtype=w["dtype"], mode="r")
     named = model.named_params()
     offs, total = w["offs"], w["total"]
     workers = args.workers
     micro = max(1, cfg["batch_size"] // workers)
     steps, warmup, clip = w["steps"], w["warmup"], w["clip"]
-    barrier, gshms = w["barrier"], w["gshms"]
+    barrier, gshms, pshm = w["barrier"], w["gshms"], w["pshm"]
     rng = np.random.default_rng(cfg.get("seed", 1337) + args.seed + 101 * rank)
     out = args.out
     best = w["best"]
     t0 = time.time()
+    gn = 0.0
 
     for step in range(w["start"] + 1, steps + 1):
         lr = lr_at(step, steps, cfg["lr"], warmup)
@@ -118,14 +132,18 @@ def _par_loop(rank):
         _write_flat(gshms[rank], named, offs)
         barrier.wait()
 
-        acc = np.zeros(total, dtype=np.float32)
-        for g in gshms:
-            acc += np.frombuffer(g, dtype=np.float32)
-        acc /= workers
-        for (_, p), (shape, off, n) in zip(named, offs):
-            p.grad = acc[off:off + n].reshape(shape).copy()
-        gn = opt.clip(clip)
-        opt.step(lr)
+        if rank == 0:
+            acc = np.zeros(total, dtype=np.float32)
+            for g in gshms:
+                acc += np.frombuffer(g, dtype=np.float32)
+            acc /= workers
+            for (_, p), (shape, off, n) in zip(named, offs):
+                p.grad = acc[off:off + n].reshape(shape).copy()
+            gn = opt.clip(clip)
+            opt.step(lr)
+            _write_data(pshm, named, offs)
+        barrier.wait()
+        _read_flat(pshm, named, offs)
 
         if rank != 0:
             continue
@@ -148,41 +166,59 @@ def _par_loop(rank):
             save(model, cfg, os.path.join(out, f"ckpt_{step}.npz"), step, best)
 
     if rank == 0:
-        w["best"] = best
         print(f"done {time.time() - t0:.0f}s best val {best:.4f}", flush=True)
+        if w.get("queue") is not None:
+            w["queue"].put(best)
 
 
-def parallel_train(cfg, args, model, opt, train, val, start, steps, warmup, clip, best):
+def parallel_train(cfg, args, model, opt, train, val, start, steps, warmup, clip, best, dtype):
     import multiprocessing as mp
+
+    for var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        os.environ[var] = "1"
 
     try:
         ctx = mp.get_context("fork")
+        shared_model = True
     except ValueError:
-        print("parallel training needs fork, falling back to 1 worker", flush=True)
-        args.workers = 1
-        return best
+        ctx = mp.get_context("spawn")
+        shared_model = False
+
     cpu = os.cpu_count() or 1
     if args.workers > cpu - 1:
         print(f"workers {args.workers} above cpu-1, clamping to {cpu - 1}", flush=True)
         args.workers = max(1, cpu - 1)
+    if args.workers < 2:
+        return None
+
     named = model.named_params()
     offs, total = _layout(named)
     gshms = [ctx.RawArray("f", total) for _ in range(args.workers)]
+    pshm = ctx.RawArray("f", total)
+    _write_data(pshm, named, offs)
     barrier = ctx.Barrier(args.workers)
+    queue = None if shared_model else ctx.Queue()
+    state = None if shared_model else {k: np.array(v) for k, v in model.state().items()}
 
-    PAR.update({"cfg": cfg, "args": args, "model": model, "opt": opt, "train": train, "val": val,
-                "offs": offs, "total": total, "steps": steps, "warmup": warmup, "clip": clip,
-                "barrier": barrier, "gshms": gshms, "start": start, "best": best})
+    w = {"cfg": cfg, "args": args, "model": model if shared_model else None, "state": state,
+         "data": args.data, "dtype": dtype, "offs": offs, "total": total, "steps": steps,
+         "warmup": warmup, "clip": clip, "barrier": barrier, "gshms": gshms, "pshm": pshm,
+         "start": start, "best": best, "queue": queue}
 
-    procs = [ctx.Process(target=_par_loop, args=(r,), daemon=True) for r in range(1, args.workers)]
+    procs = [ctx.Process(target=_par_loop, args=(r, w), daemon=True) for r in range(1, args.workers)]
     for p in procs:
         p.start()
     try:
-        _par_loop(0)
+        _par_loop(0, w)
     finally:
         for p in procs:
-            p.join(timeout=60)
-    return PAR.get("best", best)
+            p.join(timeout=120)
+    if queue is not None:
+        try:
+            return queue.get(timeout=30)
+        except Exception:
+            return best
+    return best
 
 
 def save(model, cfg, path, step=0, best=float("inf")):
@@ -231,8 +267,9 @@ def main():
     t0 = time.time()
 
     if args.workers > 1:
-        parallel_train(cfg, args, model, opt, train, val, start, steps, warmup, clip, best)
-        return
+        done = parallel_train(cfg, args, model, opt, train, val, start, steps, warmup, clip, best, dt)
+        if done is not None:
+            return
 
     for step in range(start + 1, steps + 1):
         lr = lr_at(step, steps, cfg["lr"], warmup)
