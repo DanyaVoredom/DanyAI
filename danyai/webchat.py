@@ -2,6 +2,7 @@ import argparse
 import json
 import queue
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PAGE = """<!doctype html>
@@ -123,6 +124,45 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, "not found")
 
+    def _proxy(self, req):
+        turns = parse_turns(str(req.get("prompt", "")))
+        body = {"messages": turns, "stream": True,
+                "max_tokens": int(req.get("max_tokens", 100)),
+                "temperature": float(req.get("temperature", 0.8)),
+                "top_p": float(req.get("top_p", 0.95))}
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        url = self.server.api_base.rstrip("/") + "/chat/completions"
+        rq = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                    headers={"Content-Type": "application/json"})
+        self._relay(rq)
+        self.close_connection = True
+
+    def _relay(self, rq):
+        try:
+            with urllib.request.urlopen(rq, timeout=900) as r:
+                for raw in r:
+                    self._feed(raw.decode("utf-8", "replace").strip())
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception as e:
+            self._fail(e)
+        self._finish()
+
+    def _feed(self, line):
+        if not line.startswith("data:"):
+            return
+        payload = line[5:].strip()
+        if not payload:
+            return
+        try:
+            delta = json.loads(payload)["choices"][0]["delta"].get("content")
+        except Exception:
+            return
+        if delta:
+            self._sse({"choices": [{"delta": {"content": delta}, "index": 0}]})
     def _sse(self, obj):
         chunk = "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
         self.wfile.write(chunk.encode("utf-8"))
@@ -134,6 +174,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         n = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(n) or b"{}")
+        if getattr(self.server, "api_base", None):
+            self._proxy(req)
+            return
         q = self.server.jobs
         job = {
             "prompt": req.get("prompt", ""),

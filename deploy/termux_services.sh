@@ -43,6 +43,7 @@ exec $TS "$BIN" -m "$MODEL" $LORA --host 0.0.0.0 --port 8081 -c 2048 -np 1 -t 4 
 
 litellm_body='sleep 20
 cd "$HOME/DanyAI" || exit 1
+export LD_PRELOAD=/data/data/com.termux/files/usr/lib/libpython3.14.so
 BIN=/data/data/com.termux/files/usr/bin/litellm
 [ -x "$BIN" ] || { echo "litellm не установлен"; exec sleep 3600; }
 timeout 5 termux-wake-lock 2>/dev/null || true
