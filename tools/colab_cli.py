@@ -832,6 +832,9 @@ def _find_chrome():
         env = os.environ.get("PLAYWRIGHT_CHROMIUM")
         if env and Path(env).exists():
             return env
+        for fixed in ("/usr/bin/google-chrome", "/opt/google/chrome/chrome"):
+            if Path(fixed).exists():
+                return fixed
         for base in (Path.home() / ".cache" / "ms-playwright").glob(
             "chromium*/chrome-linux*/chrome"
         ):
@@ -924,6 +927,10 @@ def _spawn(profile, headed, port):
 
 
 def connect(p, profile, headed):
+    external = os.environ.get("COLAB_CDP_ENDPOINT")
+    if external:
+        browser = p.chromium.connect_over_cdp(external)
+        return browser.contexts[0] if browser.contexts else browser.new_context(), None
     endpoint, proc = _spawn(profile, headed, _free_port())
     if endpoint:
         browser = p.chromium.connect_over_cdp(endpoint)
