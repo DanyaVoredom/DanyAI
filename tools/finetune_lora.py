@@ -129,6 +129,8 @@ def lr_at(step, steps, base, warmup):
 
 
 def chunked_ce(logits, labels, chunk=128):
+    logits = logits[:, :-1, :]
+    labels = labels[:, 1:]
     total = None
     n = 0
     for i in range(0, logits.size(1), chunk):
