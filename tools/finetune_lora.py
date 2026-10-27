@@ -6,6 +6,7 @@ import random
 import time
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 
@@ -127,6 +128,25 @@ def lr_at(step, steps, base, warmup):
     return base * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * p)))
 
 
+def chunked_ce(logits, labels, chunk=128):
+    total = None
+    n = 0
+    for i in range(0, logits.size(1), chunk):
+        lg = logits[:, i : i + chunk].float()
+        lb = labels[:, i : i + chunk]
+        part = F.cross_entropy(
+            lg.reshape(-1, lg.size(-1)),
+            lb.reshape(-1),
+            ignore_index=-100,
+            reduction="sum",
+        )
+        total = part if total is None else total + part
+        n += int((lb != -100).sum())
+    if total is None:
+        return logits.float().sum() * 0.0
+    return total / max(1, n)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3.5-2B")
@@ -146,6 +166,7 @@ def main():
     ap.add_argument("--eval-every", type=int, default=200)
     ap.add_argument("--eval-limit", type=int, default=0)
     ap.add_argument("--sort-window", type=int, default=128)
+    ap.add_argument("--loss-chunk", type=int, default=128)
     ap.add_argument("--attn", default="sdpa")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--merge", action="store_true")
@@ -284,10 +305,11 @@ def main():
 
     def micro(ids, lab):
         with autocast:
-            out = model(input_ids=ids, labels=lab)
-            loss = out.loss / args.grad_accum
+            out = model(input_ids=ids)
+            loss = chunked_ce(out.logits, lab, args.loss_chunk) / args.grad_accum
         scaler.scale(loss).backward()
-        return float(out.loss)
+        del out
+        return float(loss) * args.grad_accum
 
     while step < total:
         opt.zero_grad(set_to_none=True)
@@ -346,7 +368,9 @@ def main():
                     ids = ids.to(device)
                     lab = lab.to(device)
                     with autocast:
-                        l = model(input_ids=ids, labels=lab).loss
+                        l = chunked_ce(
+                            model(input_ids=ids).logits, lab, args.loss_chunk
+                        )
                     n = int((lab >= 0).sum())
                     tot += float(l) * n
                     cnt += n
