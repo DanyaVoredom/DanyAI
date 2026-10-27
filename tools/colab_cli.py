@@ -1054,12 +1054,30 @@ def gist_parts(gist_url):
 
 
 def blocked_sessions(page):
+    try:
+        if page.get_by_role("button", name="Manage sessions").count():
+            return True
+    except Exception:
+        pass
+    js = r"""() => {
+      const out = [];
+      const walk = (root) => {
+        if (!root) return;
+        out.push(root.innerText || '');
+        const els = root.querySelectorAll ? root.querySelectorAll('*') : [];
+        for (const el of els) {
+          if (el.shadowRoot) walk(el.shadowRoot);
+        }
+      };
+      walk(document.body);
+      return out.join('\n').toLowerCase();
+    }"""
     for frame in page.frames:
         try:
-            t = frame.inner_text("body").lower()
+            t = frame.evaluate(js)
         except Exception:
             continue
-        if "слишком много" in t or "too many" in t or "maximum number of sessions" in t:
+        if "too many" in t or "maximum number of sessions" in t:
             return True
     return False
 
