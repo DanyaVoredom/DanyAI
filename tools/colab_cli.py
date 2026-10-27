@@ -1100,6 +1100,52 @@ def wait_for_slot(page, timeout, check_every=60):
     return not blocked_sessions(page)
 
 
+def free_sessions(page):
+    js = r"""() => {
+      const labels = ['Manage sessions', 'Управление сеансами', 'Управление сессиями'];
+      for (const b of document.querySelectorAll('button, [role=button], a')) {
+        const t = (b.innerText || b.textContent || '').trim();
+        if (!labels.includes(t)) continue;
+        const r = b.getBoundingClientRect();
+        if (r.width && r.height) { b.click(); return t; }
+      }
+      return null;
+    }"""
+    opened = None
+    for frame in page.frames:
+        try:
+            opened = frame.evaluate(js)
+        except Exception:
+            continue
+        if opened:
+            break
+    if not opened:
+        return False
+    page.wait_for_timeout(4000)
+    killed = 0
+    for _ in range(10):
+        loc = page.locator('button[aria-label*="Terminate"]')
+        n = loc.count()
+        if n == 0:
+            break
+        try:
+            loc.first.click()
+            killed += 1
+        except Exception:
+            break
+        page.wait_for_timeout(4000)
+    close = page.get_by_role("button", name="Close")
+    if close.count():
+        try:
+            close.last.click()
+        except Exception:
+            pass
+    page.wait_for_timeout(2000)
+    if killed:
+        log("terminated %d colab sessions" % killed)
+    return killed > 0
+
+
 def start_with_slot(page, first_cell, timeout, check_every=180):
     end = time.time() + timeout
     attempt = 0
@@ -1107,7 +1153,11 @@ def start_with_slot(page, first_cell, timeout, check_every=180):
         attempt += 1
         if blocked_sessions(page):
             if attempt % 5 == 1:
-                log("session limit, waiting for a free colab slot")
+                log("session limit, freeing colab sessions")
+            if free_sessions(page):
+                page.wait_for_timeout(8000)
+                frame_call(page, CONNECT_JS)
+                continue
             close_dialogs(page)
             page.wait_for_timeout(check_every * 1000)
             frame_call(page, CONNECT_JS)
