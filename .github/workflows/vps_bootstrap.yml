@@ -1,0 +1,26 @@
+name: vps bootstrap
+on:
+  workflow_dispatch:
+jobs:
+  tunnel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: reach vps
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          install -m 600 /dev/stdin ~/key <<< "$KEY"
+          ssh -i ~/key -o StrictHostKeyChecking=no -o ConnectTimeout=15 lipton@37.114.46.113 "echo VPS_OK; uname -m"
+      - name: start tunnel
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          ssh -i ~/key -o StrictHostKeyChecking=no lipton@37.114.46.113 "
+            pgrep -f 'cloudflared tunnel' >/dev/null && echo tunnel-already || true
+            curl -sL -o /tmp/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+            chmod +x /tmp/cloudflared
+            mkdir -p ~/.config/cloudflared
+            nohup /tmp/cloudflared tunnel --url tcp://localhost:22 --no-autoupdate > /tmp/cf.log 2>&1 &
+            sleep 10
+            grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cf.log | head -1
+          "
