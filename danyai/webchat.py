@@ -85,7 +85,6 @@ async function go(){
 """
 
 
-
 def parse_turns(prompt):
     turns = []
     i = 0
@@ -96,9 +95,9 @@ def parse_turns(prompt):
         a = prompt.find("<|assistant|>", u)
         if a < 0:
             break
-        user = prompt[u + 8:a]
+        user = prompt[u + 8 : a]
         nxt = prompt.find("<|user|>", a)
-        seg = prompt[a + 13:(nxt if nxt >= 0 else len(prompt))]
+        seg = prompt[a + 13 : (nxt if nxt >= 0 else len(prompt))]
         ai = seg.split("<|end|>")[0]
         turns.append({"role": "user", "content": user})
         if ai:
@@ -126,17 +125,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def _proxy(self, req):
         turns = parse_turns(str(req.get("prompt", "")))
-        body = {"messages": turns, "stream": True,
-                "max_tokens": int(req.get("max_tokens", 100)),
-                "temperature": float(req.get("temperature", 0.8)),
-                "top_p": float(req.get("top_p", 0.95))}
+        body = {
+            "messages": turns,
+            "stream": True,
+            "max_tokens": int(req.get("max_tokens", 100)),
+            "temperature": float(req.get("temperature", 0.8)),
+            "top_p": float(req.get("top_p", 0.95)),
+        }
+        model = getattr(self.server, "api_model", None)
+        if model:
+            body["model"] = model
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Connection", "close")
         self.end_headers()
         url = self.server.api_base.rstrip("/") + "/chat/completions"
-        rq = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                    headers={"Content-Type": "application/json"})
+        headers = {"Content-Type": "application/json"}
+        key = getattr(self.server, "api_key", None)
+        if key:
+            headers["Authorization"] = "Bearer " + key
+        rq = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode(),
+            headers=headers,
+        )
         self._relay(rq)
         self.close_connection = True
 
@@ -163,6 +175,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if delta:
             self._sse({"choices": [{"delta": {"content": delta}, "index": 0}]})
+
     def _finish(self):
         try:
             self.wfile.write(b"data\n")
@@ -172,7 +185,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _fail(self, e):
         try:
-            self._sse({"choices": [{"delta": {"content": "backend: " + str(e)[:120]}, "index": 0}]})
+            self._sse(
+                {
+                    "choices": [
+                        {"delta": {"content": "backend: " + str(e)[:120]}, "index": 0}
+                    ]
+                }
+            )
         except Exception:
             pass
 
@@ -208,11 +227,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
         self.end_headers()
-        job["sink"] = lambda d: self._sse({"choices": [{"delta": {"content": d}, "index": 0}]})
+        job["sink"] = lambda d: self._sse(
+            {"choices": [{"delta": {"content": d}, "index": 0}]}
+        )
         q.put(job)
         job["done"].wait()
         try:
-            self._sse({"choices": [{"delta": {}, "finish_reason": "length", "index": 0}]})
+            self._sse(
+                {"choices": [{"delta": {}, "finish_reason": "length", "index": 0}]}
+            )
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
@@ -238,10 +261,19 @@ def worker(engine, tok, q, lock):
                     pass
 
         with lock:
-            engine.generate(tok, job["prompt"], job["tokens"], job["temp"],
-                            job["top_k"], job["top_p"], job["repetition"],
-                            job["presence"], job["frequency"], job["seed"],
-                            on_token=emit)
+            engine.generate(
+                tok,
+                job["prompt"],
+                job["tokens"],
+                job["temp"],
+                job["top_k"],
+                job["top_p"],
+                job["repetition"],
+                job["presence"],
+                job["frequency"],
+                job["seed"],
+                on_token=emit,
+            )
         job["done"].set()
 
 
@@ -255,6 +287,8 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--api-base", default="")
+    ap.add_argument("--api-model", default="")
+    ap.add_argument("--api-key", default="")
     args = ap.parse_args()
 
     engine, _ = Engine.from_file(args.ckpt)
@@ -265,6 +299,8 @@ def main():
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     srv.jobs = q
     srv.api_base = args.api_base or None
+    srv.api_model = args.api_model or None
+    srv.api_key = args.api_key or None
     print(f"http://{args.host}:{args.port}/", flush=True)
     srv.serve_forever()
 
