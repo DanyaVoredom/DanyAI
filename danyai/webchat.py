@@ -1,9 +1,32 @@
 import argparse
 import json
 import queue
+import re
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+BLOCK = [
+    re.compile(
+        r"(детск|несовершеннолет|малолет|подрост|школьн|pedo|child|minor|underage|teen|preteen|loli|shota)"
+        r"[\s\S]{0,80}"
+        r"(секс|порн|интим|эрот|раздева|обнаж|гол(ый|ая|ые)|sex|porn|nude|naked|erotic|cp\b|ls\b)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(секс|порн|интим|эрот|sex|porn|nude|naked|erotic)"
+        r"[\s\S]{0,80}"
+        r"(детск|несовершеннолет|малолет|подрост|школьн|pedo|child|minor|underage|preteen|loli|shota)",
+        re.IGNORECASE,
+    ),
+]
+
+REFUSAL = "Не отвечаю на такие запросы. Спроси что-нибудь другое."
+
+
+def forbidden(text):
+    return any(p.search(text or "") for p in BLOCK)
+
 
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>DanyAI</title>
@@ -200,12 +223,29 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(chunk.encode("utf-8"))
         self.wfile.flush()
 
+    def _refuse(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            self._sse({"choices": [{"delta": {"content": REFUSAL}, "index": 0}]})
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        self.close_connection = True
+
     def do_POST(self):
         if self.path != "/v1/completions":
             self._send(404, "not found")
             return
         n = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(n) or b"{}")
+        if forbidden(str(req.get("prompt", ""))):
+            self._refuse()
+            return
         if getattr(self.server, "api_base", None):
             self._proxy(req)
             return
