@@ -127,7 +127,7 @@ SFT_TORCH = """!python -m danyai.torch_sft --ckpt __RUNS__/best.npz --data data/
 !python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Придумай короткую историю про кота.<|assistant|>" --tokens 120 --temp 0.7
 print("sft done")"""
 
-TRAIN_LORA = """!PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -u tools/finetune_lora.py --model __MODEL__ --data data/sft.jsonl,data/tools.jsonl --out __RUNS__/lora --max-len 512 --batch 4 --grad-accum 4 --grad-ckpt 0 --sort-window 128 --lr 1e-4 --warmup 30 --epochs 1 --eval-share 0.005 --eval-every 200 --eval-limit 32 --limit __LIMIT__ --fallback Qwen/Qwen2.5-1.5B-Instruct
+TRAIN_LORA = """!PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -u tools/finetune_lora.py --model __MODEL__ --data data/sft.jsonl,data/tools.jsonl --out __RUNS__/lora --max-len 512 --batch 2 --grad-accum 8 --grad-ckpt 0 --sort-window 128 --loss-chunk 96 --lr 1e-4 --warmup 30 --epochs 1 --eval-share 0.005 --eval-every 200 --eval-limit 32 --limit __LIMIT__ --fallback Qwen/Qwen2.5-1.5B-Instruct
 print("lora done")"""
 
 PACK_LORA = """import base64, pathlib, time, uuid, urllib.request, zipfile
