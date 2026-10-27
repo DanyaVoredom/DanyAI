@@ -21,15 +21,27 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _sse(self, obj):
-        chunk = "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+        chunk = "data: " + json.dumps(obj, ensure_ascii=True) + "\n\n"
         self.wfile.write(chunk.encode("utf-8"))
         self.wfile.flush()
 
     def do_GET(self):
         if self.path == "/health":
-            self._send(200, {"status": "ok", "model": STATE["cfg"].get("name", "DanyAI")})
+            self._send(
+                200, {"status": "ok", "model": STATE["cfg"].get("name", "DanyAI")}
+            )
         elif self.path == "/v1/models":
-            self._send(200, {"data": [{"id": STATE["cfg"].get("name", "DanyAI").lower(), "object": "model"}]})
+            self._send(
+                200,
+                {
+                    "data": [
+                        {
+                            "id": STATE["cfg"].get("name", "DanyAI").lower(),
+                            "object": "model",
+                        }
+                    ]
+                },
+            )
         else:
             self._send(404, {"error": "not found"})
 
@@ -60,16 +72,18 @@ class Handler(BaseHTTPRequestHandler):
             stop = None
         tokens = int(req.get("max_tokens", req.get("tokens", 100)))
         tokens = max(1, min(tokens, 2048))
+        if not stop:
+            stop = ["<|end|>", "<|user|>", "<|assistant|>"]
         return {
             "tokens": tokens,
             "temp": float(req.get("temperature", req.get("temp", 0.8))),
-            "top_k": int(req.get("top_k", 40)),
+            "top_k": int(req.get("top_k", 50)),
             "top_p": float(req.get("top_p", 0.95)),
-            "repetition": float(req.get("repetition", 1.05)),
+            "repetition": float(req.get("repetition", 1.15)),
             "presence": float(req.get("presence", 0.0)),
             "frequency": float(req.get("frequency", 0.0)),
             "seed": int(req.get("seed", 0)),
-            "stop": [str(x) for x in stop] if stop else None,
+            "stop": [str(x) for x in stop],
         }
 
     def _allowed(self):
@@ -96,8 +110,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             out = []
             with LOCK:
-                STATE["engine"].generate(STATE["tok"], prompt,
-                                         on_token=lambda d, _n: out.append(d), **kw)
+                STATE["engine"].generate(
+                    STATE["tok"], prompt, on_token=lambda d, _n: out.append(d), **kw
+                )
             self._reply("".join(out), prompt)
         except Exception as e:
             self._send(400, {"error": str(e)})
@@ -109,20 +124,32 @@ class Handler(BaseHTTPRequestHandler):
         if tok is not None:
             n_in = len(tok.encode(prompt))
             n_out = len(tok.encode(text))
-            usage = {"prompt_tokens": n_in, "completion_tokens": n_out,
-                     "total_tokens": n_in + n_out}
+            usage = {
+                "prompt_tokens": n_in,
+                "completion_tokens": n_out,
+                "total_tokens": n_in + n_out,
+            }
         if self.path == "/v1/chat/completions":
-            body = {"object": "chat.completion", "model": name,
-                    "choices": [{"index": 0,
-                                 "message": {"role": "assistant", "content": text},
-                                 "finish_reason": "length"}]}
+            body = {
+                "object": "chat.completion",
+                "model": name,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": text},
+                        "finish_reason": "length",
+                    }
+                ],
+            }
             if usage:
                 body["usage"] = usage
             self._send(200, body)
         elif self.path == "/v1/completions":
-            body = {"object": "text_completion",
-                    "choices": [{"text": text, "index": 0, "finish_reason": "length"}],
-                    "model": name}
+            body = {
+                "object": "text_completion",
+                "choices": [{"text": text, "index": 0, "finish_reason": "length"}],
+                "model": name,
+            }
             if usage:
                 body["usage"] = usage
             self._send(200, body)
@@ -145,7 +172,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with LOCK:
                 STATE["engine"].generate(STATE["tok"], prompt, on_token=emit, **kw)
-            self._sse({"choices": [{"delta": {}, "finish_reason": "length", "index": 0}]})
+            self._sse(
+                {"choices": [{"delta": {}, "finish_reason": "length", "index": 0}]}
+            )
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):

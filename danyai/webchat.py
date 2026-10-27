@@ -307,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _sse(self, obj):
-        chunk = "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+        chunk = "data: " + json.dumps(obj, ensure_ascii=True) + "\n\n"
         self.wfile.write(chunk.encode("utf-8"))
         self.wfile.flush()
 
