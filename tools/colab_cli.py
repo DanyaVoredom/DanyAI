@@ -38,7 +38,7 @@ print("setup done")"""
 
 SETUP_LORA = """!pip -q install -U transformers peft accelerate
 !pip -q install flash-linear-attention 2>&1 | tail -2
-!pip -q install causal-conv1d 2>&1 | tail -2
+!pip -q install --only-binary=:all: causal-conv1d 2>&1 | tail -1
 !python -c "import fla; print('fla', fla.__version__)" || !pip uninstall -y -q flash-linear-attention
 %cd /content
 !rm -rf /content/DanyAI
