@@ -833,7 +833,7 @@ def _find_chrome():
         if env and Path(env).exists():
             return env
         for base in (Path.home() / ".cache" / "ms-playwright").glob(
-            "chromium*/chrome-linux/chrome"
+            "chromium*/chrome-linux*/chrome"
         ):
             return str(base)
         return None
