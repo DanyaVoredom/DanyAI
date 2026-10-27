@@ -5,6 +5,11 @@ import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+try:
+    from danyai.chatui import UI_HTML
+except Exception:
+    from chatui import UI_HTML
+
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>DanyAI</title>
 <style>
@@ -119,9 +124,115 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
-            self._send(200, PAGE)
+            self._send(200, UI_HTML)
+        elif self.path == "/api/meta":
+            self._meta()
         else:
             self._send(404, "not found")
+
+    def _meta(self):
+        base = getattr(self.server, "api_base", None)
+        model = getattr(self.server, "api_model", None) or "danyai-local"
+        models = [model]
+        if base:
+            try:
+                url = base.rstrip("/") + "/models"
+                headers = {}
+                key = getattr(self.server, "api_key", None)
+                if key:
+                    headers["Authorization"] = "Bearer " + key
+                rq = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(rq, timeout=10) as r:
+                    data = json.loads(r.read().decode("utf-8", "replace"))
+                ids = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                if ids:
+                    models = ids
+            except Exception:
+                pass
+        body = json.dumps({"proxy": bool(base), "model": model, "models": models})
+        self._send(200, body, "application/json; charset=utf-8")
+
+    def _chat(self, req):
+        msgs = req.get("messages") or []
+        turns = []
+        for m in msgs:
+            role = str(m.get("role") or "")
+            text = str(m.get("content") or "")
+            if role in ("system", "user", "assistant") and text:
+                turns.append({"role": role, "content": text})
+        if not turns:
+            self._send(400, "empty", "text/plain; charset=utf-8")
+            return
+        base = getattr(self.server, "api_base", None)
+        if not base:
+            prompt = ""
+            for t in turns:
+                if t["role"] == "user":
+                    prompt += "<|user|>" + t["content"]
+                elif t["role"] == "assistant":
+                    prompt += "<|assistant|>" + t["content"] + "<|end|>"
+            prompt += "<|assistant|>"
+            self._local(prompt, req)
+            return
+        body = {
+            "messages": turns,
+            "stream": True,
+            "max_tokens": int(req.get("max_tokens", 512)),
+            "temperature": float(req.get("temperature", 0.6)),
+            "top_p": float(req.get("top_p", 0.95)),
+        }
+        model = req.get("model") or getattr(self.server, "api_model", None)
+        if model:
+            body["model"] = model
+        headers = {"Content-Type": "application/json"}
+        key = getattr(self.server, "api_key", None)
+        if key:
+            headers["Authorization"] = "Bearer " + key
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        rq = urllib.request.Request(
+            base.rstrip("/") + "/chat/completions",
+            data=json.dumps(body).encode(),
+            headers=headers,
+        )
+        self._relay(rq)
+        self.close_connection = True
+
+    def _local(self, prompt, req):
+        q = self.server.jobs
+        job = {
+            "prompt": prompt,
+            "tokens": int(req.get("max_tokens", 512)),
+            "temp": float(req.get("temperature", 0.6)),
+            "top_k": int(req.get("top_k", 40)),
+            "top_p": float(req.get("top_p", 0.95)),
+            "repetition": float(req.get("repetition", 1.05)),
+            "presence": 0.0,
+            "frequency": 0.0,
+            "seed": 0,
+            "done": threading.Event(),
+        }
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        job["sink"] = lambda d: self._sse(
+            {"choices": [{"delta": {"content": d}, "index": 0}]}
+        )
+        q.put(job)
+        job["done"].wait()
+        try:
+            self._sse({"choices": [{"delta": {}, "finish_reason": "stop", "index": 0}]})
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        self.close_connection = True
+        return
 
     def _proxy(self, req):
         turns = parse_turns(str(req.get("prompt", "")))
@@ -201,6 +312,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def do_POST(self):
+        if self.path == "/api/chat":
+            n = int(self.headers.get("Content-Length", 0))
+            self._chat(json.loads(self.rfile.read(n) or b"{}"))
+            return
         if self.path != "/v1/completions":
             self._send(404, "not found")
             return
