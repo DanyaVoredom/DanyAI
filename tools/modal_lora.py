@@ -14,7 +14,14 @@ DATA_FILES = ["sft.jsonl", "tools.jsonl"]
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
-    .pip_install("numpy", "torch", "transformers", "peft", "accelerate")
+    .pip_install(
+        "numpy",
+        "torch",
+        "transformers",
+        "peft",
+        "accelerate",
+        "flash-linear-attention",
+    )
     .run_commands(
         f"git clone -q --branch {BRANCH} {REPO} /root/DanyAI",
         "cd /root/DanyAI && pip install -q -e .",
@@ -68,12 +75,23 @@ def build_data(root="/data"):
     return out
 
 
-@app.function(image=image, gpu="A10G", timeout=21600,
-              volumes={"/data": data_vol, "/runs": runs_vol, "/hf": hf_vol})
-def lora(model: str = "huihui-ai/Huihui-Qwen3.5-2B-abliterated",
-         max_len: int = 512, batch: int = 2, grad_accum: int = 8,
-         epochs: float = 1.0, limit: int = 0, lr: float = 1e-4,
-         out: str = "lora", sft_only: bool = False):
+@app.function(
+    image=image,
+    gpu="A10G",
+    timeout=21600,
+    volumes={"/data": data_vol, "/runs": runs_vol, "/hf": hf_vol},
+)
+def lora(
+    model: str = "huihui-ai/Huihui-Qwen3.5-2B-abliterated",
+    max_len: int = 512,
+    batch: int = 4,
+    grad_accum: int = 4,
+    epochs: float = 1.0,
+    limit: int = 0,
+    lr: float = 1e-4,
+    out: str = "lora",
+    sft_only: bool = False,
+):
     fetch_data()
     data_vol.commit()
     if sft_only:
@@ -84,11 +102,45 @@ def lora(model: str = "huihui-ai/Huihui-Qwen3.5-2B-abliterated",
     outdir = pathlib.Path("/runs") / out
     outdir.mkdir(parents=True, exist_ok=True)
 
-    cmd = ["python", "-m", "tools.finetune_lora", "--model", model,
-           "--data", str(path), "--out", str(outdir),
-           "--max-len", str(max_len), "--batch", str(batch),
-           "--grad-accum", str(grad_accum), "--epochs", str(epochs),
-           "--lr", str(lr), "--lora-r", "16", "--lora-alpha", "32"]
+    cmd = [
+        "python",
+        "-m",
+        "tools.finetune_lora",
+        "--model",
+        model,
+        "--data",
+        str(path),
+        "--out",
+        str(outdir),
+        "--max-len",
+        str(max_len),
+        "--batch",
+        str(batch),
+        "--grad-accum",
+        str(grad_accum),
+        "--epochs",
+        str(epochs),
+        "--grad-ckpt",
+        "0",
+        "--sort-window",
+        "128",
+        "--loss-chunk",
+        "128",
+        "--eval-every",
+        "200",
+        "--eval-limit",
+        "32",
+        "--eval-share",
+        "0.005",
+        "--warmup",
+        "30",
+        "--lr",
+        str(lr),
+        "--lora-r",
+        "16",
+        "--lora-alpha",
+        "32",
+    ]
     if limit:
         cmd += ["--limit", str(limit)]
     run(cmd)
@@ -106,7 +158,21 @@ def lora(model: str = "huihui-ai/Huihui-Qwen3.5-2B-abliterated",
 
 
 @app.local_entrypoint()
-def main(out: str = "lora", epochs: float = 1.0, limit: int = 0,
-         max_len: int = 512, batch: int = 2, sft_only: bool = False):
-    print(lora.remote(out=out, epochs=epochs, limit=limit, max_len=max_len,
-                      batch=batch, sft_only=sft_only))
+def main(
+    out: str = "lora",
+    epochs: float = 1.0,
+    limit: int = 0,
+    max_len: int = 512,
+    batch: int = 2,
+    sft_only: bool = False,
+):
+    print(
+        lora.remote(
+            out=out,
+            epochs=epochs,
+            limit=limit,
+            max_len=max_len,
+            batch=batch,
+            sft_only=sft_only,
+        )
+    )
