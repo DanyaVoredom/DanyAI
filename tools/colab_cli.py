@@ -828,6 +828,15 @@ FIND_TEXT_JS = r"""(labels) => {
 
 
 def _find_chrome():
+    if sys.platform != "win32":
+        env = os.environ.get("PLAYWRIGHT_CHROMIUM")
+        if env and Path(env).exists():
+            return env
+        for base in (Path.home() / ".cache" / "ms-playwright").glob(
+            "chromium*/chrome-linux/chrome"
+        ):
+            return str(base)
+        return None
     roots = [
         os.environ.get("PROGRAMFILES", ""),
         os.environ.get("PROGRAMFILES(X86)", ""),
@@ -896,8 +905,10 @@ def _spawn(profile, headed, port):
         "--window-size=1440,960",
     ]
     if not headed:
-        cmd.append("--headless=new")
-    cmd.append("about:blank")
+        cmd.append("--headless=new" if sys.platform == "win32" else "--headless")
+    cmd.append("--no-sandbox" if sys.platform != "win32" else "about:blank")
+    if sys.platform != "win32":
+        cmd.append("about:blank")
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     atexit.register(lambda: proc.poll() is None and proc.terminate())
     endpoint = "http://127.0.0.1:%d" % port
