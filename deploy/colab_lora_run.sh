@@ -30,6 +30,11 @@ for attempt in 1 2 3; do
   if [ -z "$last" ]; then
     last=$(grep -o "@@CKPT [^ ]*" "$LOG" 2>/dev/null | tail -1 | cut -d' ' -f2)
   fi
+  case "$last" in
+    scp:*) RESUME="file:///home/lipton/lora_in/${last#scp:}" ;;
+    http:*) RESUME="file:///home/lipton/lora_in/${last#http:}" ;;
+    *) RESUME="$last" ;;
+  esac
   if [ "$rc" = "0" ]; then
     echo "=== done at attempt $attempt" >> "$LOG"
     break

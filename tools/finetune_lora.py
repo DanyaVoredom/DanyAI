@@ -43,6 +43,20 @@ def publish_snapshot(out_dir, tag=""):
     except Exception:
         pass
     try:
+        rq = urllib.request.Request(
+            "http://37.114.46.113:8088/upload/danyai-up/" + name,
+            data=data,
+            method="POST",
+            headers={"Content-Type": "application/zip"},
+        )
+        with urllib.request.urlopen(rq, timeout=600) as r:
+            ok = r.read().decode("utf-8", "replace").strip()
+        if ok == "ok":
+            print(f"@@CKPT http:{name} {len(data)}", flush=True)
+            return "http:" + name
+    except Exception as e:
+        print(f"snapshot http failed: {type(e).__name__} {e}", flush=True)
+    try:
         body, ctype = _multipart("file", name, data, "application/zip")
         rq = urllib.request.Request(
             "https://0x0.st",
