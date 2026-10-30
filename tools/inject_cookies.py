@@ -13,9 +13,15 @@ shutil.rmtree(PROFILE, ignore_errors=True)
 os.makedirs(PROFILE, exist_ok=True)
 
 with sync_playwright() as p:
+    exe = None
+    for cand in ("/usr/bin/google-chrome", "/opt/google/chrome/chrome"):
+        if os.path.exists(cand):
+            exe = cand
+            break
     ctx = p.chromium.launch_persistent_context(
         PROFILE,
         headless=True,
+        executable_path=exe,
         args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
