@@ -127,8 +127,18 @@ SFT_TORCH = """!python -m danyai.torch_sft --ckpt __RUNS__/best.npz --data data/
 !python -m danyai.sample --ckpt __RUNS__/sft/best.npz --tok data/tokenizer.json --prompt "<|user|>Придумай короткую историю про кота.<|assistant|>" --tokens 120 --temp 0.7
 print("sft done")"""
 
-TRAIN_LORA = """!PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -u tools/finetune_lora.py --model __MODEL__ --data data/sft.jsonl,data/tools.jsonl --out __RUNS__/lora --max-len 512 --batch 2 --grad-accum 8 --grad-ckpt 0 --sort-window 128 --loss-chunk 96 --lr 1e-4 --warmup 30 --epochs 1 --eval-share 0.005 --eval-every 200 --eval-limit 32 --limit __LIMIT__ --fallback Qwen/Qwen2.5-1.5B-Instruct
+TRAIN_LORA = """!PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -u tools/finetune_lora.py --model __MODEL__ --data data/sft.jsonl,data/tools.jsonl --out __RUNS__/lora --max-len 512 --batch 2 --grad-accum 8 --grad-ckpt 0 --sort-window 128 --loss-chunk 96 --lr 1e-4 --warmup 30 --epochs 1 --eval-share 0.005 --eval-every 200 --eval-limit 32 --limit __LIMIT__ --snapshot 1 __RESUME__ --fallback Qwen/Qwen2.5-1.5B-Instruct
 print("lora done")"""
+
+RESUME_CELL = """import shutil, urllib.request, zipfile
+url = "__RESUME__"
+zp = "/content/resume.zip"
+urllib.request.urlretrieve(url, zp)
+shutil.rmtree("/content/resume", ignore_errors=True)
+with zipfile.ZipFile(zp) as z:
+    z.extractall("/content/resume")
+import os
+print("resume files", sorted(os.listdir("/content/resume"))[:8])"""
 
 PACK_LORA = """import base64, pathlib, time, uuid, urllib.request, zipfile
 src = pathlib.Path("__RUNS__/lora")
@@ -1265,6 +1275,7 @@ def main():
     ap.add_argument("--dump", default="runs/colab_output.txt")
     ap.add_argument("--model", default="Qwen/Qwen3.5-2B")
     ap.add_argument("--lora-limit", type=int, default=0)
+    ap.add_argument("--resume-url", default="")
     ap.add_argument("--channel", default="chrome")
     ap.add_argument("--login", action="store_true")
     args = ap.parse_args()
@@ -1313,12 +1324,22 @@ def main():
             log(f"data raw {data_raw}")
             bundle_cell = BUNDLE.replace("__DATA_RAW__", data_raw)
         if args.trainer == "lora":
+            resume = ""
+            if args.resume_url:
+                resume = "/content/resume"
             train = (
                 TRAIN_LORA.replace("__MODEL__", args.model)
                 .replace("__RUNS__", args.runs)
                 .replace("__LIMIT__", str(args.lora_limit))
+                .replace(
+                    "__RESUME__",
+                    f"--resume-adapter {resume}" if resume else "",
+                )
             )
-            cells = [SETUP_LORA, bundle_cell, train]
+            cells = [SETUP_LORA, bundle_cell]
+            if args.resume_url:
+                cells.append(RESUME_CELL.replace("__RESUME__", args.resume_url))
+            cells.append(train)
             if not args.no_artifacts:
                 cells.append(PACK_LORA.replace("__RUNS__", args.runs))
         else:

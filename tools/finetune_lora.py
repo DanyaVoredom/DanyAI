@@ -1,13 +1,74 @@
 import argparse
+import io
 import json
 import math
 import os
 import random
 import time
+import urllib.request
+import uuid
+import zipfile
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+
+
+def _multipart(field, name, data, ctype):
+    b = uuid.uuid4().hex
+    head = (
+        f"--{b}\r\nContent-Disposition: form-data; name=\"{field}\"; "
+        f"filename=\"{name}\"\r\nContent-Type: {ctype}\r\n\r\n"
+    ).encode()
+    tail = f"\r\n--{b}--\r\n".encode()
+    return head + data + tail, "multipart/form-data; boundary=" + b
+
+
+def publish_snapshot(out_dir, tag=""):
+    out = Path(out_dir)
+    if not out.exists():
+        return None
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(out.rglob("*")):
+            if f.is_file():
+                z.write(f, f.relative_to(out))
+    data = buf.getvalue()
+    name = f"danyai_lora{tag}.zip"
+    try:
+        body, ctype = _multipart("file", name, data, "application/zip")
+        rq = urllib.request.Request(
+            "https://0x0.st",
+            data=body,
+            headers={"Content-Type": ctype, "User-Agent": "danyai-lora/1.0"},
+        )
+        with urllib.request.urlopen(rq, timeout=600) as r:
+            url = r.read().decode("utf-8", "replace").strip()
+        if url.startswith("http"):
+            print(f"@@CKPT {url} {len(data)}", flush=True)
+            return url
+    except Exception as e:
+        print(f"snapshot 0x0 failed: {type(e).__name__} {e}", flush=True)
+    try:
+        rq = urllib.request.Request(
+            "https://bashupload.com/" + name,
+            data=data,
+            method="PUT",
+            headers={"User-Agent": "danyai-lora/1.0"},
+        )
+        with urllib.request.urlopen(rq, timeout=600) as r:
+            text = r.read().decode("utf-8", "replace")
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("http") or line.startswith("wget"):
+                if line.startswith("wget"):
+                    line = line.split(" ", 1)[1]
+                print(f"@@CKPT {line} {len(data)}", flush=True)
+                return line
+    except Exception as e:
+        print(f"snapshot bashupload failed: {type(e).__name__} {e}", flush=True)
+    return None
 
 
 def load_jsonl(path):
@@ -174,6 +235,8 @@ def main():
     ap.add_argument("--merge", action="store_true")
     ap.add_argument("--fallback", default="Qwen/Qwen2.5-1.5B-Instruct")
     ap.add_argument("--grad-ckpt", type=int, default=1)
+    ap.add_argument("--resume-adapter", default="")
+    ap.add_argument("--snapshot", type=int, default=1)
     args = ap.parse_args()
 
     from transformers import AutoTokenizer
@@ -238,6 +301,14 @@ def main():
     )
     disable_torchao()
     model = get_peft_model(model, lcfg)
+    if args.resume_adapter:
+        try:
+            from peft import PeftModel
+
+            model = PeftModel.from_pretrained(model, args.resume_adapter, is_trainable=True)
+            print("resumed adapter", args.resume_adapter, flush=True)
+        except Exception as e:
+            print("resume failed:", type(e).__name__, str(e)[:200], flush=True)
     if args.grad_ckpt and cuda:
         try:
             model.gradient_checkpointing_enable()
@@ -381,9 +452,13 @@ def main():
             model.save_pretrained(args.out)
             tok.save_pretrained(args.out)
             print(f"saved adapter {args.out}", flush=True)
+            if args.snapshot:
+                publish_snapshot(args.out, f"_s{step}")
 
     model.save_pretrained(args.out)
     tok.save_pretrained(args.out)
+    if args.snapshot:
+        publish_snapshot(args.out)
     print(f"done {time.time() - t0:.0f}s steps {total} tokens {seen}", flush=True)
 
     if args.merge:
