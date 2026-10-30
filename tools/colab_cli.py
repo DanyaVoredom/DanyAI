@@ -942,8 +942,20 @@ def _spawn(profile, headed, port):
 def connect(p, profile, headed):
     external = os.environ.get("COLAB_CDP_ENDPOINT")
     if external:
-        browser = p.chromium.connect_over_cdp(external)
-        return browser.contexts[0] if browser.contexts else browser.new_context(), None
+        try:
+            browser = p.chromium.connect_over_cdp(external)
+            return browser.contexts[0] if browser.contexts else browser.new_context(), None
+        except Exception:
+            port = int(external.rsplit(":", 1)[-1])
+            endpoint, proc = _spawn(profile, headed, port)
+            if endpoint:
+                browser = p.chromium.connect_over_cdp(endpoint)
+                return (
+                    browser.contexts[0] if browser.contexts else browser.new_context(),
+                    proc,
+                )
+            if proc:
+                proc.terminate()
     endpoint, proc = _spawn(profile, headed, _free_port())
     if endpoint:
         browser = p.chromium.connect_over_cdp(endpoint)
