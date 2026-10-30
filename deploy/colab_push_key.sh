@@ -13,5 +13,6 @@ chmod 600 "$H/.ssh/authorized_keys"
 grep -q "colab-push" "$H/.ssh/authorized_keys" || echo "$ENTRY" >> "$H/.ssh/authorized_keys"
 echo "--- test ---"
 echo hello > /tmp/t.txt
-scp -q -o StrictHostKeyChecking=no -o BatchMode=yes -i "$H/.ssh/colab_push" /tmp/t.txt lipton@127.0.0.1:test.txt && echo scp-ok || echo scp-fail
+scp -O -q -o StrictHostKeyChecking=no -o BatchMode=yes -i "$H/.ssh/colab_push" /tmp/t.txt lipton@127.0.0.1:test.txt && echo scp-ok || echo scp-fail
 ls -la "$H/lora_in" | tail -3
+

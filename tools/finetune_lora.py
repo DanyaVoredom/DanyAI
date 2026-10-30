@@ -80,6 +80,7 @@ def publish_snapshot(out_dir, tag=""):
             rc = subprocess.call(
                 [
                     "scp",
+                    "-O",
                     "-q",
                     "-o",
                     "StrictHostKeyChecking=no",
