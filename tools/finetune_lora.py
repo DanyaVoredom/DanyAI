@@ -4,6 +4,7 @@ import json
 import math
 import os
 import random
+import subprocess
 import time
 import urllib.request
 import uuid
@@ -36,6 +37,11 @@ def publish_snapshot(out_dir, tag=""):
                 z.write(f, f.relative_to(out))
     data = buf.getvalue()
     name = f"danyai_lora{tag}.zip"
+    local = out.parent / name
+    try:
+        local.write_bytes(data)
+    except Exception:
+        pass
     try:
         body, ctype = _multipart("file", name, data, "application/zip")
         rq = urllib.request.Request(
@@ -68,6 +74,31 @@ def publish_snapshot(out_dir, tag=""):
                 return line
     except Exception as e:
         print(f"snapshot bashupload failed: {type(e).__name__} {e}", flush=True)
+    key = "/content/colab_push"
+    if os.path.exists(key):
+        try:
+            rc = subprocess.call(
+                [
+                    "scp",
+                    "-q",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "ConnectTimeout=15",
+                    "-i",
+                    key,
+                    str(local),
+                    "lipton@37.114.46.113:" + name,
+                ],
+                timeout=900,
+            )
+            if rc == 0:
+                print(f"@@CKPT scp:{name} {len(data)}", flush=True)
+                return "scp:" + name
+        except Exception as e:
+            print(f"snapshot scp failed: {type(e).__name__} {e}", flush=True)
     return None
 
 

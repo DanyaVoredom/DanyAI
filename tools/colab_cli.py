@@ -130,6 +130,12 @@ print("sft done")"""
 TRAIN_LORA = """!PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -u tools/finetune_lora.py --model __MODEL__ --data data/sft.jsonl,data/tools.jsonl --out __RUNS__/lora --max-len 512 --batch 2 --grad-accum 8 --grad-ckpt 0 --sort-window 128 --loss-chunk 96 --lr 1e-4 --warmup 30 --epochs 1 --eval-share 0.005 --eval-every 200 --eval-limit 32 --limit __LIMIT__ --snapshot 1 __RESUME__ --fallback Qwen/Qwen2.5-1.5B-Instruct
 print("lora done")"""
 
+PUSH_CELL = """import os, pathlib
+p = pathlib.Path("/content/colab_push")
+p.write_text('''__KEY__''')
+os.chmod(p, 0o600)
+print("push key ready", p.stat().st_size)"""
+
 RESUME_CELL = """import shutil, urllib.request, zipfile
 url = "__RESUME__"
 zp = "/content/resume.zip"
@@ -1350,6 +1356,9 @@ def main():
                 )
             )
             cells = [SETUP_LORA, bundle_cell]
+            key_path = Path("/home/lipton/.ssh/colab_push")
+            if key_path.exists():
+                cells.append(PUSH_CELL.replace("__KEY__", key_path.read_text().strip()))
             if args.resume_url:
                 cells.append(RESUME_CELL.replace("__RESUME__", args.resume_url))
             cells.append(train)
