@@ -791,7 +791,6 @@ def stream(page, ctx, stop_when, limit, dump):
         if not alive(ctx):
             return False
         try:
-            text = frames_text(page)
             if quota_at is None:
                 body = body_text(page)
                 if any(m in body for m in GPU_BLOCK):
@@ -799,6 +798,7 @@ def stream(page, ctx, stop_when, limit, dump):
                     log("gpu quota dialog")
             if quota_at and time.time() - quota_at > 20:
                 return "quota"
+            text = frames_text(page)
             if text != prev:
                 common = 0
                 for a, b in zip(prev, text):
