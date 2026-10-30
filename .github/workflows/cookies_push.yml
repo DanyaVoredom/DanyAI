@@ -1,0 +1,17 @@
+name: cookies push
+on:
+  workflow_dispatch:
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: push
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+          CJ: ${{ secrets.COOKIE_JSON }}
+        run: |
+          install -m 600 /dev/stdin ~/key <<< "$KEY"
+          printf '%s' "$CJ" > /tmp/cj.json
+          wc -c /tmp/cj.json
+          scp -q -i ~/key -o StrictHostKeyChecking=no /tmp/cj.json lipton@37.114.46.113:/home/lipton/ff_cookies.json
+          echo pushed
