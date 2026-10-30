@@ -10,40 +10,47 @@ if ! pgrep -f "Xvfb :99" >/dev/null; then
   sleep 2
 fi
 
-LOG=runs/lora14.log
-: > "$LOG"
+LOG=runs/lora15.log
+echo "=== start $(date -Is)" >> "$LOG"
 RESUME=""
-for attempt in 1 2 3; do
-  DUMP="runs/lora14_a${attempt}.txt"
-  echo "=== attempt $attempt resume='$RESUME' $(date -Is)" >> "$LOG"
+i=0
+while [ "$i" -lt 12 ]; do
+  i=$((i + 1))
+  DUMP="runs/lora15_a${i}.txt"
+  echo "=== attempt $i resume='$RESUME' $(date -Is)" >> "$LOG"
   /home/lipton/venv/bin/python tools/colab_cli.py --trainer lora \
     --model huihui-ai/Huihui-Qwen3.5-2B-abliterated \
     --data-release data-v2 --data data2 \
     --profile /home/lipton/DanyAI/colab-profile \
-    --out "runs/lora14_a${attempt}" --runs /content/danyai_runs \
+    --out "runs/lora15_a${i}" --runs /content/danyai_runs \
     --timeout 14400 --connect-wait 1800 \
     --resume-url "$RESUME" \
     --dump "$DUMP" >> "$LOG" 2>&1
   rc=$?
-  echo "=== attempt $attempt rc=$rc $(date -Is)" >> "$LOG"
+  echo "=== attempt $i rc=$rc $(date -Is)" >> "$LOG"
+  if [ "$rc" = "0" ]; then
+    echo "=== done at attempt $i" >> "$LOG"
+    break
+  fi
   last=$(grep -o "@@CKPT [^ ]*" "$DUMP" 2>/dev/null | tail -1 | cut -d' ' -f2)
   if [ -z "$last" ]; then
     last=$(grep -o "@@CKPT [^ ]*" "$LOG" 2>/dev/null | tail -1 | cut -d' ' -f2)
   fi
-  case "$last" in
-    scp:*) RESUME="file:///home/lipton/lora_in/${last#scp:}" ;;
-    http:*) RESUME="file:///home/lipton/lora_in/${last#http:}" ;;
-    *) RESUME="$last" ;;
-  esac
-  if [ "$rc" = "0" ]; then
-    echo "=== done at attempt $attempt" >> "$LOG"
-    break
-  fi
   if [ -n "$last" ]; then
-    RESUME="$last"
+    case "$last" in
+      scp:*) RESUME="file:///home/lipton/lora_in/${last#scp:}" ;;
+      http:*) RESUME="file:///home/lipton/lora_in/${last#http:}" ;;
+      *) RESUME="$last" ;;
+    esac
     echo "=== resume from $RESUME" >> "$LOG"
+  fi
+  if [ "$rc" = "6" ]; then
+    echo "=== gpu quota, backoff 2h" >> "$LOG"
+    sleep 7200
+  elif [ "$rc" = "4" ]; then
+    echo "=== session limit, backoff 1h" >> "$LOG"
+    sleep 3600
   else
-    echo "=== no snapshot, retry fresh after pause" >> "$LOG"
     sleep 600
   fi
 done

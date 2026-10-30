@@ -762,16 +762,32 @@ def dismiss_warnings(page, rounds=8):
     return False
 
 
+GPU_BLOCK = (
+    "due to usage limits",
+    "из-за лимитов",
+    "limits on usage",
+    "Connect without GPU",
+    "Подключиться без ускорителя",
+    "No GPU backend",
+)
+
+
 def stream(page, ctx, stop_when, limit, dump):
     end = time.time() + limit
     prev = ""
     marker_at = None
     err_at = None
+    quota_at = None
     while time.time() < end:
         if not alive(ctx):
             return False
         try:
             text = frames_text(page)
+            if quota_at is None and any(m in text for m in GPU_BLOCK):
+                quota_at = time.time()
+                log("gpu quota dialog")
+            if quota_at and time.time() - quota_at > 20:
+                return "quota"
             if text != prev:
                 common = 0
                 for a, b in zip(prev, text):
@@ -1467,6 +1483,10 @@ def main():
 
         stop = "pack done" if not args.no_artifacts else "train done"
         ok = stream(page, ctx, stop, args.timeout, Path(args.dump))
+        if ok == "quota":
+            log("gpu quota exhausted")
+            teardown(ctx, proc, args.profile)
+            return 6
         log("finished" if ok else "timed out")
 
         if ok and not args.no_artifacts:
