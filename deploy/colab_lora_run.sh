@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 export PATH="/home/lipton/bin:/usr/local/bin:/usr/bin:/bin"
 export DISPLAY=:99
-export COLAB_CDP_ENDPOINT="http://127.0.0.1:9333"
+unset COLAB_CDP_ENDPOINT
 cd /home/lipton/DanyAI || exit 1
 mkdir -p runs
 

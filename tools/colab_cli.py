@@ -956,6 +956,7 @@ def connect(p, profile, headed):
                 )
             if proc:
                 proc.terminate()
+            raise RuntimeError("cannot start chrome with profile " + str(profile))
     endpoint, proc = _spawn(profile, headed, _free_port())
     if endpoint:
         browser = p.chromium.connect_over_cdp(endpoint)

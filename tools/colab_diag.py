@@ -1,10 +1,33 @@
 import json
 import os
+import re
+import subprocess
 import urllib.request
 
 from playwright.sync_api import sync_playwright
 
-EP = os.environ.get("COLAB_CDP_ENDPOINT", "http://127.0.0.1:9333")
+
+def cdp_endpoint():
+    env = os.environ.get("COLAB_CDP_ENDPOINT")
+    if env:
+        return env
+    try:
+        out = subprocess.run(
+            ["pgrep", "-af", "google-chrome"], capture_output=True, text=True
+        ).stdout
+    except Exception:
+        return "http://127.0.0.1:9333"
+    for port in reversed(re.findall(r"--remote-debugging-port=(\d+)", out)):
+        try:
+            urllib.request.urlopen("http://127.0.0.1:%s/json/version" % port, timeout=2)
+            return "http://127.0.0.1:%s" % port
+        except Exception:
+            continue
+    return "http://127.0.0.1:9333"
+
+
+EP = cdp_endpoint()
+print("cdp", EP)
 with sync_playwright() as p:
     b = p.chromium.connect_over_cdp(EP)
     ctx = b.contexts[0]
