@@ -1,0 +1,19 @@
+name: vps exec
+on:
+  workflow_dispatch:
+    inputs:
+      cmd:
+        description: command
+        required: true
+        default: date
+jobs:
+  exec:
+    runs-on: ubuntu-latest
+    steps:
+      - name: run
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+          CMD: ${{ inputs.cmd }}
+        run: |
+          install -m 600 /dev/stdin ~/key <<< "$KEY"
+          ssh -i ~/key -o StrictHostKeyChecking=no -o ConnectTimeout=15 lipton@37.114.46.113 "bash -lc $(printf '%q' "$CMD")" 2>&1
