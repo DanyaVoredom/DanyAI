@@ -787,9 +787,13 @@ def stream(page, ctx, stop_when, limit, dump):
     marker_at = None
     err_at = None
     quota_at = None
+    started_at = time.time()
     while time.time() < end:
         if not alive(ctx):
             return False
+        if not prev and time.time() - started_at > 600:
+            log("no runtime output, assume gpu quota")
+            return "quota"
         try:
             if quota_at is None:
                 body = body_text(page)
