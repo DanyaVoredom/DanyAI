@@ -19,6 +19,7 @@ for attempt in 1 2 3; do
   /home/lipton/venv/bin/python tools/colab_cli.py --trainer lora \
     --model huihui-ai/Huihui-Qwen3.5-2B-abliterated \
     --data-release data-v2 --data data2 \
+    --profile /home/lipton/DanyAI/colab-profile \
     --out "runs/lora14_a${attempt}" --runs /content/danyai_runs \
     --timeout 14400 --connect-wait 1800 \
     --resume-url "$RESUME" \
