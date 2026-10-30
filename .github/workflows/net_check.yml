@@ -1,0 +1,22 @@
+name: net check
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: url
+        required: true
+        default: http://37.114.46.113:18099/
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: curl
+        env:
+          U: ${{ inputs.url }}
+        run: |
+          echo "GET $U"
+          curl -s -m 15 -o /dev/null -w "%{http_code}\n" "$U" || echo get-fail
+          echo "POST"
+          echo -n hello > /tmp/t.txt
+          curl -s -m 20 --data-binary @/tmp/t.txt "$U/upload/danyai-up/gha.txt" || echo post-fail
+          echo
