@@ -44,7 +44,7 @@ def publish_snapshot(out_dir, tag=""):
         pass
     try:
         rq = urllib.request.Request(
-            "http://37.114.46.113:8088/upload/danyai-up/" + name,
+            "http://37.114.46.113:18099/upload/danyai-up/" + name,
             data=data,
             method="POST",
             headers={"Content-Type": "application/zip"},
@@ -518,3 +518,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
