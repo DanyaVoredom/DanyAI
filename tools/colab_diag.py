@@ -13,7 +13,7 @@ def cdp_endpoint():
         return env
     try:
         out = subprocess.run(
-            ["pgrep", "-af", "google-chrome"], capture_output=True, text=True
+            ["pgrep", "-af", "chrome"], capture_output=True, text=True
         ).stdout
     except Exception:
         return "http://127.0.0.1:9333"
@@ -59,3 +59,4 @@ with sync_playwright() as p:
         print("shot saved")
     except Exception as e:
         print("shot err", e)
+
