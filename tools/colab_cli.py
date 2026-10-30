@@ -714,6 +714,15 @@ def frames_text(page):
     return "\n".join(parts)
 
 
+def body_text(page):
+    try:
+        return page.evaluate(
+            "() => (document.body && document.body.innerText || '').slice(0, 6000)"
+        )
+    except Exception:
+        return ""
+
+
 def editor_text(page):
     vals = frame_call(page, CELLS_JS) or []
     if vals:
@@ -783,9 +792,11 @@ def stream(page, ctx, stop_when, limit, dump):
             return False
         try:
             text = frames_text(page)
-            if quota_at is None and any(m in text for m in GPU_BLOCK):
-                quota_at = time.time()
-                log("gpu quota dialog")
+            if quota_at is None:
+                body = body_text(page)
+                if any(m in body for m in GPU_BLOCK):
+                    quota_at = time.time()
+                    log("gpu quota dialog")
             if quota_at and time.time() - quota_at > 20:
                 return "quota"
             if text != prev:
