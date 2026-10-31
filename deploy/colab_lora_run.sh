@@ -21,7 +21,7 @@ while [ "$i" -lt 12 ]; do
   /home/lipton/venv/bin/python tools/colab_cli.py --trainer lora \
     --model huihui-ai/Huihui-Qwen3.5-2B-abliterated \
     --data-release data-v2 --data data2 \
-    --profile /home/lipton/DanyAI/colab-profile \
+    --profile /home/lipton/DanyAI/colab-profile-g2 \
     --out "runs/lora15_a${i}" --runs /content/danyai_runs \
     --timeout 14400 --connect-wait 1800 \
     --resume-url "$RESUME" \
@@ -55,3 +55,4 @@ while [ "$i" -lt 12 ]; do
   fi
 done
 echo "=== finished $(date -Is)" >> "$LOG"
+
