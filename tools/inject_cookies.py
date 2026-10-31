@@ -17,6 +17,8 @@ for c in data:
         e = -1
     if e <= 0:
         e = -1
+    elif e > 1e11:
+        e = e / 1000.0
     c["expires"] = e
     if c.get("sameSite") not in ("Strict", "Lax", "None"):
         c["sameSite"] = "Lax"
