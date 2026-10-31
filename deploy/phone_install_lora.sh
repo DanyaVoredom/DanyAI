@@ -5,7 +5,7 @@ MODELS="$HOME/models_gguf"
 mkdir -p "$MODELS"
 BASE="$MODELS/qwen35-2b-abliterated-q4km.gguf"
 LORA="$MODELS/danyai-lora.gguf"
-BASE_SIZE=1270809024
+BASE_MIN=1260000000
 LORA_MIN=10000000
 BASE_URL="https://huggingface.co/interimlabs/InterimLabs-Huihui-Qwen3.5-2B-abliterated-GGUF-Q4_K_M/resolve/main/model.gguf"
 LORA_URL="https://github.com/DanyaVoredom/DanyAI/releases/download/lora-v1/danyai-lora.gguf"
