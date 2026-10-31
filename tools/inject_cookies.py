@@ -9,6 +9,17 @@ COOKIES = sys.argv[1] if len(sys.argv) > 1 else "/home/lipton/ff_cookies.json"
 PROFILE = sys.argv[2] if len(sys.argv) > 2 else "/home/lipton/DanyAI/colab-profile-ff"
 
 data = json.load(open(COOKIES, encoding="utf-8"))
+for c in data:
+    e = c.get("expires", -1)
+    try:
+        e = float(e)
+    except Exception:
+        e = -1
+    if e <= 0:
+        e = -1
+    c["expires"] = e
+    if c.get("sameSite") not in ("Strict", "Lax", "None"):
+        c["sameSite"] = "Lax"
 shutil.rmtree(PROFILE, ignore_errors=True)
 os.makedirs(PROFILE, exist_ok=True)
 
