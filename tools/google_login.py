@@ -77,7 +77,20 @@ with sync_playwright() as p:
         body = page.evaluate("() => (document.body && document.body.innerText || '').slice(0,600)")
         print("body", " | ".join(body.splitlines())[:400])
     print("clicked2", click_any(page, ["Next", "Далее", "Sign in", "Войти"]))
-    page.wait_for_timeout(12000)
+    page.wait_for_timeout(8000)
+    for attempt in range(3):
+        url = page.url
+        if "recoveryoptions" in url or "challenge" in url:
+            click_any(page, ["Отмена", "Cancel", "Not now", "Позже", "Пропустить", "Skip"])
+            page.wait_for_timeout(5000)
+        else:
+            break
+    page.goto("https://colab.research.google.com/", wait_until="domcontentloaded", timeout=90000)
+    page.wait_for_timeout(6000)
+    print("colab url", page.url[:100])
+    body = page.evaluate("() => (document.body && document.body.innerText || '').slice(0, 1200)")
+    print("signin", "Sign in" in body or "Войти" in body)
+    print("email", page.evaluate("() => { const m = document.body.innerText.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/); return m ? m[0] : ''; }"))
     print("final url", page.url[:100])
     body = page.evaluate("() => (document.body && document.body.innerText || '').slice(0, 1500)")
     print("body", " | ".join(body.splitlines())[:700])
