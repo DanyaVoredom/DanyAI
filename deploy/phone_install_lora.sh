@@ -61,6 +61,25 @@ if [ -f "$RUN" ]; then
     sed -i 's#-m "[^"]*qwen35-2b-abliterated-q4km\.gguf"#& --lora "$HOME/models_gguf/danyai-lora.gguf"#' "$RUN"
   fi
   grep -n -- '--lora\|abliterated' "$RUN" || { echo "patch failed"; exit 1; }
+  WQ="$SVDIR/danyai-webchat-qwen"
+  if [ ! -f "$WQ/run" ]; then
+    pkill -f "danyai.webchat.*8091" 2>/dev/null || true
+    mkdir -p "$WQ/log" "$HOME/DanyAI/logs/danyai-webchat-qwen"
+    cat > "$WQ/run" <<'EOS'
+#!/data/data/com.termux/files/usr/bin/sh
+sleep 8
+cd "$HOME/DanyAI" || exit 1
+timeout 5 termux-wake-lock 2>/dev/null || true
+exec python -m danyai.webchat --ckpt models/model.npz --tok models/tokenizer.json --host 0.0.0.0 --port 8091 --api-base http://127.0.0.1:8081/v1 --api-model danyai-qwen 2>&1
+EOS
+    chmod +x "$WQ/run"
+    cat > "$WQ/log/run" <<'EOS'
+#!/data/data/com.termux/files/usr/bin/sh
+exec svlogd -tt "$HOME/DanyAI/logs/danyai-webchat-qwen"
+EOS
+    chmod +x "$WQ/log/run"
+    sv up danyai-webchat-qwen 2>/dev/null || true
+  fi
   sv restart danyai-llama
 else
   echo "no run script at $RUN"
@@ -84,3 +103,14 @@ tail -c 4000 "$HOME/DanyAI/logs/danyai-llama/current" 2>/dev/null | grep -i "lor
 
 try=$(curl -s -m 60 -X POST http://127.0.0.1:8081/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"danyai-qwen","messages":[{"role":"user","content":"reply with one word: ok"}],"max_tokens":16,"temperature":0}')
 echo "smoke $try"
+
+for i in $(seq 1 30); do
+  if curl -sf -m 3 http://127.0.0.1:8091/api/meta >/dev/null 2>&1; then
+    echo "webchat-qwen ok after $((i * 2))s"
+    break
+  fi
+  sleep 2
+done
+curl -s -m 5 http://127.0.0.1:8091/api/meta || true
+echo
+sv status danyai-webchat-qwen || true

@@ -406,11 +406,13 @@ def main():
     ap.add_argument("--api-key", default="")
     args = ap.parse_args()
 
-    engine, _ = Engine.from_file(args.ckpt)
-    tok = BPETokenizer.load(args.tok)
-    q = queue.Queue()
-    lock = threading.Lock()
-    threading.Thread(target=worker, args=(engine, tok, q, lock), daemon=True).start()
+    q = None
+    if not args.api_base:
+        engine, _ = Engine.from_file(args.ckpt)
+        tok = BPETokenizer.load(args.tok)
+        q = queue.Queue()
+        lock = threading.Lock()
+        threading.Thread(target=worker, args=(engine, tok, q, lock), daemon=True).start()
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     srv.jobs = q
     srv.api_base = args.api_base or None

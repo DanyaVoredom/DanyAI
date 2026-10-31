@@ -61,6 +61,11 @@ timeout 5 termux-wake-lock 2>/dev/null || true
 export OPENBLAS_NUM_THREADS=2
 exec python -m danyai.webchat --ckpt models/model.npz --tok models/tokenizer.json --host 0.0.0.0 --port 8090 2>&1'
 
+webchat_qwen_body='sleep 8
+cd "$HOME/DanyAI" || exit 1
+timeout 5 termux-wake-lock 2>/dev/null || true
+exec python -m danyai.webchat --ckpt models/model.npz --tok models/tokenizer.json --host 0.0.0.0 --port 8091 --api-base http://127.0.0.1:8081/v1 --api-model danyai-qwen 2>&1'
+
 train_body="sleep 60
 cd \"\$HOME/DanyAI\" || exit 1
 timeout 5 termux-wake-lock 2>/dev/null || true
@@ -78,6 +83,7 @@ write_service danyai-llama "$llama_body"
 write_service danyai-litellm "$litellm_body"
 write_service danyai-server "$server_body"
 write_service danyai-webchat "$webchat_body"
+write_service danyai-webchat-qwen "$webchat_qwen_body"
 write_service danyai-train "$train_body"
 
 mkdir -p "$HOME/.termux/boot"
@@ -88,12 +94,12 @@ pgrep -f "runsvdir $SVDIR" >/dev/null || exec runsvdir "$SVDIR"
 EOF
 chmod +x "$HOME/.termux/boot/danyai"
 
-for name in danyai-llama danyai-litellm danyai-server danyai-webchat danyai-train; do
+for name in danyai-llama danyai-litellm danyai-server danyai-webchat danyai-webchat-qwen danyai-train; do
   sv up "$name" 2>/dev/null || true
 done
 
 sleep 8
-for name in danyai-llama danyai-litellm danyai-server danyai-webchat danyai-train; do
+for name in danyai-llama danyai-litellm danyai-server danyai-webchat danyai-webchat-qwen danyai-train; do
   printf "%s: " "$name"
   sv status "$name" 2>/dev/null || echo "нет статуса"
 done
