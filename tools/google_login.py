@@ -38,13 +38,13 @@ def click_any(page, labels):
 with sync_playwright() as p:
     ctx = p.chromium.launch_persistent_context(
         PROFILE,
-        headless=True,
+        headless=False,
         executable_path=exe,
         args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-blink-features=AutomationControlled",
-            "--lang=en-US",
+            "--lang=en-US", "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
         ],
         locale="en-US",
     )
@@ -83,3 +83,4 @@ with sync_playwright() as p:
     print("body", " | ".join(body.splitlines())[:700])
     page.screenshot(path="/home/lipton/DanyAI/runs/login.png")
     ctx.close()
+
