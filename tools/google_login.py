@@ -49,8 +49,11 @@ with sync_playwright() as p:
         locale="en-US",
     )
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    page.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+    )
     page.goto(
-        "https://accounts.google.com/ServiceLogin?service=colab&continue=https://colab.research.google.com/",
+        "https://accounts.google.com/",
         wait_until="domcontentloaded",
         timeout=120000,
     )
